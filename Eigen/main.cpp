@@ -13,7 +13,7 @@ int main() {
 
     Eigen::EigenSolver<Eigen::Matrix4d> es(A);
 
-    auto evals = es.eigenvalues();
+    [[maybe_unused]] auto evals = es.eigenvalues();
     auto evecs = es.eigenvectors();
 
     std::cout << "Eigenvalues:\n";
