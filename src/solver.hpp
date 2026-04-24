@@ -46,6 +46,25 @@ inline StateVec operator*(double scalar, const StateVec& vec) {
     return vec * scalar;
 }
 
+
+struct SimulationParams {
+    // Friction parameters
+    double alpha;                  // Friction constant
+    double dt;                     // Timestep size
+    long num_timesteps;            // Number of timesteps
+    
+    // Search Grid parameters
+    double l1_init_guess;          // Initial (LQR) Guess for lambda_1 costate
+    double l2_init_guess;          // Initial (LQR) Guess for lambda_2 costate
+    double search_radius;          // Search radius to left/right/up/down of this guess
+    double costate_step_size;      // How big each step is
+    int grid_size;                 // How many entries are in each dimension
+
+    // Initial pendulum state (fixed)
+    double theta_init;             // Initial angle
+    double phi_init;               // Initial angular velocity
+};
+
 struct Result {
     double l1;
     double l2;
