@@ -39,22 +39,23 @@ StateVec rk4_step(const StateVec& y, const double dt, const double alpha) {
     StateVec k1, k2, k3, k4, y_next;
 
     // Step 1: k1 = f(y)
-    evaluate_derivatives(y, alpha, k1);
+    k1 = evaluate_derivatives(y, alpha);
 
     // Step 2: k2 = f(y + dt/2 * k1)
-    evaluate_derivatives(y + ((0.5 * dt) * k1), alpha, k2);
+    k2 = evaluate_derivatives(y + ((0.5 * dt) * k1), alpha);
 
     // Step 3: k3 = f(y + dt/2 * k2)
-    evaluate_derivatives(y + ((0.5 * dt) * k2), alpha, k3);
+    k3 = evaluate_derivatives(y + ((0.5 * dt) * k2), alpha);
 
     // Step 4: k4 = f(y + dt * k3)
-    evaluate_derivatives(y + (dt * k3), alpha, k4);
+    k4 = evaluate_derivatives(y + (dt * k3), alpha);
 
     // Final step: y_next = y + dt/6 * (k1 + 2k2 + 2k3 + k4)
     y_next = y + ((k1 + k2 * 2.0 + k3 * 2.0 + k4) * (dt / 6.0));
     return y_next;
 }
 
+__host__ __device__
 StateVec run_simulation(const StateVec& y0, const double alpha, const double dt, const double T_max) {
     // Run simulation with a given set of initial conditions
     StateVec current_state = y0;
