@@ -66,7 +66,7 @@ StateVec run_simulation(const StateVec& y0, const double alpha, const double dt,
         current_state = rk4_step(current_state, dt, alpha);
     }
 
-    return StateVec;
+    return current_state;
 }	
 
 

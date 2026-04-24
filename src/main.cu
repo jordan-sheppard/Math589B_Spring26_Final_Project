@@ -12,7 +12,7 @@ int main(int argc, char** argv) {
     double phi   = std::atof(argv[2]);
     double alpha = std::atof(argv[3]);
 
-    Result r = solve(theta, phi);
+    Result r = solve(theta, phi, alpha);
 
     std::printf("%.10f %.10f %.10f\n", r.l1, r.l2, r.cost);
     return 0;
