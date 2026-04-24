@@ -2,6 +2,10 @@
 #include <cmath>
 #include <cstdlib>
 
+#define EIGEN_NO_CUDA
+#define EIGEN_DONT_VECTORIZE
+#include <Eigen/Dense>
+#include <complex>
 
 __host__ __device__
 StateVec evaluate_derivatives(const StateVec& y, const double alpha) {
@@ -69,7 +73,48 @@ StateVec run_simulation(const StateVec& y0, const double alpha, const double dt,
     return current_state;
 }	
 
+void compute_lqr_guess(const double theta, const double phi, const double alpha, double& l1_guess, double& l2_guess) {
+    double theta_wrapped = std::atan2(std::sin(theta), std::cos(theta));  // Wraps to (-pi, pi]
+    
+    // Build linearization matrix about origin
+    Eigen::Matrix4d A;
+    A << 0.0,  1.0,    0.0, 0.0,
+         1.0,  -alpha, 0.0, -1.0,
+	 -1.0, 0.0,    0.0, -1.0,
+	 0.0,  -1.0,  -1.0, alpha;
 
+    // Solve for eigenvalues/eigenvectors of A
+    Eigen::EigenSolver<Eigen::Matrix4d> solver(A);
+    Eigen::Vector4cd eigenvalues = solver.eigenvalues();
+    Eigen::Matrix4cd eigenvectors = solver.eigenvectors();
+
+    // Isolate stable manifold
+    Eigen::Matrix<std::complex<double>, 4, 2> Vs;    // Columns are stable eigenvectors
+    std::size_t col = 0;
+
+    for (std::size_t i = 0; i < 4; ++i) {
+        if (eigenvalues(i).real() < 0 && col < 2) {
+            Vs.col(col) = eigenvectors.col(i);
+	    col++;
+	}
+    }
+
+    // Partition stable manifold to state/costate components 
+    Eigen::Matrix2cd Vs_state = Vs.topRows<2>();
+    Eigen::Matrix2cd Vs_costate = Vs.bottomRows<2>();
+
+    // Compute projection/Ricatti matrix P mapping costates as linear combinations of states 
+    Eigen::Matrix2cd P = Vs_costate * Vs_state.inverse();
+
+    // Given initial state vector, get initial costate vector
+    Eigen::Vector2d initial_states(theta_wrapped, phi);
+    Eigen::Vector2cd initial_costates = P * initial_states.cast<std::complex<double>>();
+
+    // The math guarantees imaginary parts cancel out
+    l1_guess = initial_costates(0).real();
+    l2_guess = initial_costates(1).real();
+
+}
 
 Result solve(double theta, double phi, double alpha) {
     Result r;
