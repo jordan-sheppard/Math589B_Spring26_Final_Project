@@ -195,13 +195,13 @@ void compute_lqr_guess(const double theta, const double phi, const double alpha,
 DeviceArrays allocate_device_arrays(int array_memory_size) {
     DeviceArrays d;
 
-    cudaMalloc(&d.costs, array_memory_size);
-    cudaMalloc(&d.thetas, array_memory_size);
-    cudaMalloc(&d.phis, array_memory_size);
-    cudaMalloc(&d.l1s, array_memory_size);
-    cudaMalloc(&d.l2s, array_memory_size);
-    cudaMalloc(&d.start_hamiltonians, array_memory_size);
-    cudaMalloc(&d.end_hamiltonians, array_memory_size);
+    gpuErrchk(cudaMalloc(&d.costs, array_memory_size));
+    gpuErrchk(cudaMalloc(&d.thetas, array_memory_size));
+    gpuErrchk(cudaMalloc(&d.phis, array_memory_size));
+    gpuErrchk(cudaMalloc(&d.l1s, array_memory_size));
+    gpuErrchk(cudaMalloc(&d.l2s, array_memory_size));
+    gpuErrchk(cudaMalloc(&d.start_hamiltonians, array_memory_size));
+    gpuErrchk(cudaMalloc(&d.end_hamiltonians, array_memory_size));
 
     return d;
 }
@@ -217,25 +217,25 @@ HostArrays copy_device_arrays_to_host(const DeviceArrays& d, const int num_array
     h.l1s = std::vector<double>(num_array_elements);
     h.l2s = std::vector<double>(num_array_elements);
 
-    cudaMemcpy(h.costs.data(), d.costs, array_memory_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h.start_hamiltonians.data(), d.start_hamiltonians, array_memory_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h.end_hamiltonians.data(), d.end_hamiltonians, array_memory_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h.thetas.data(), d.thetas, array_memory_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h.phis.data(), d.phis, array_memory_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h.l1s.data(), d.l1s, array_memory_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h.l2s.data(), d.l2s, array_memory_size, cudaMemcpyDeviceToHost);
+    gpuErrchk(cudaMemcpy(h.costs.data(), d.costs, array_memory_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h.start_hamiltonians.data(), d.start_hamiltonians, array_memory_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h.end_hamiltonians.data(), d.end_hamiltonians, array_memory_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h.thetas.data(), d.thetas, array_memory_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h.phis.data(), d.phis, array_memory_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h.l1s.data(), d.l1s, array_memory_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h.l2s.data(), d.l2s, array_memory_size, cudaMemcpyDeviceToHost));
 
     return h;
 }
 
 void free_device_arrays(DeviceArrays& d) {
-    cudaFree(d.costs);
-    cudaFree(d.start_hamiltonians);
-    cudaFree(d.end_hamiltonians);
-    cudaFree(d.thetas);
-    cudaFree(d.phis);
-    cudaFree(d.l1s);
-    cudaFree(d.l2s);
+    gpuErrchk(cudaFree(d.costs));
+    gpuErrchk(cudaFree(d.start_hamiltonians));
+    gpuErrchk(cudaFree(d.end_hamiltonians));
+    gpuErrchk(cudaFree(d.thetas));
+    gpuErrchk(cudaFree(d.phis));
+    gpuErrchk(cudaFree(d.l1s));
+    gpuErrchk(cudaFree(d.l2s));
 }
 
 ContinuationResult find_min_abs_H(const HostArrays& h, const int num_array_elements) {
@@ -271,7 +271,8 @@ ContinuationResult solve_core(const SimulationParams& p) {
 
     // Launch CUDA Kernel & run shooting method in parallel
     shooting_kernel<<<numBlocks, threadsPerBlock>>>(p, d);
-    cudaDeviceSynchronize();
+    gpuErrchk(cudaPeekAtLastError());   // Check for launch errors
+    gpuErrchk(cudaDeviceSynchronize()); // Check for execution errors & wait for GPU to finish
 
     // Copy results to host and cleanup CUDA memory
     HostArrays h = copy_device_arrays_to_host(d, num_array_elements, array_memory_size);
@@ -284,7 +285,7 @@ ContinuationResult solve_core(const SimulationParams& p) {
 Result solve(double theta, const double phi, const double alpha) {
     const double T_MAX = 5.0;                     // Artificial final time
     const double DT = 0.01;                       // Step size
-    const std::size_t GRID_SIZE = 128;            // Number of gridpoints in 1 dimension
+    const std::size_t GRID_SIZE = 127;            // Number of gridpoints in 1 dimension (should be odd)
     
     // Set up simulation parameters
     SimulationParams p;

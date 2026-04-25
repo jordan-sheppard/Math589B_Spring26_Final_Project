@@ -1,7 +1,24 @@
 #pragma once
 
 #include <cstddef> // For std::size_t
+#include <cstdio>
 #include <vector>  // For std::vector
+
+// The macro captures the file name and line number where a GPU error occurred
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+
+// The inline function evaluates the returned CUDA error code
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      // Prints the human-readable error string from CUDA
+      std::fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      
+      // Kills the program if abort is true
+      if (abort) std::exit(code);
+   }
+}
 
 constexpr std::size_t NUM_STATE_DIMS = 5;
 
