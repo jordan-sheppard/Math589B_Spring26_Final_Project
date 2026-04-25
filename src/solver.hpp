@@ -116,5 +116,5 @@ struct ContinuationResult {
 };
 
 ContinuationResult continuation_core(const SimulationParams& p);
-ContinuationResult run_continuation(double target_theta, double target_phi, double alpha);
+ContinuationResult run_continuation(double theta_target, double phi_target, double alpha);
 Result solve(double theta, double phi, double alpha);

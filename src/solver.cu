@@ -338,7 +338,7 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
 }
 
 Result refined_grid_search(ContinuationResult res, double theta_target, double phi_target, double alpha) {
-    SimulationParams p = get_simulation_params(target_theta, target_phi, alpha);
+    SimulationParams p = get_simulation_params(theta_target, phi_target, alpha);
     p.l1_init_guess = res.r.l1;
     p.l2_init_guess = res.r.l2;
     p.search_radius = 0.005;        // Very small search radius
