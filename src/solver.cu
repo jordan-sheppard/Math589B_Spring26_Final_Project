@@ -244,22 +244,23 @@ ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elem
     double best_score = 1e100;
 
     for (int k = 0; k < num_array_elements; ++k) {
-        // Squared distance from the final state to the origin
-        double dist_sq = h.thetas[k] * h.thetas[k] + h.phis[k] * h.phis[k];
+        // The accumulated cost naturally penalizes trajectories that blow up or dive-bomb
+        double trajectory_cost = h.costs[k]; 
         
-        // How far off the stable manifold are we?
-        double abs_H = std::abs(h.start_hamiltonians[k]);
+        // The starting Hamiltonian perfectly identifies the stable manifold energy surface
+        double abs_H_start = std::abs(h.start_hamiltonians[k]);
         
-        // Hybrid Score: heavily penalize trajectories with non-zero Hamiltonians
-        double score = dist_sq + (10.0 * abs_H); 
+        // The Ultimate Metric: Minimize cost, but strictly enforce the H=0 physics
+        // We use a massive penalty (10000.0) to treat H=0 as a hard constraint
+        double score = trajectory_cost + (10000.0 * abs_H_start); 
         
         if (score < best_score) {
             best_score = score;
             
-            res.r.cost = h.costs[k]; 
+            res.r.cost = trajectory_cost; 
             res.r.l1 = h.l1s[k];
             res.r.l2 = h.l2s[k];
-            res.min_abs_H = abs_H;
+            res.min_abs_H = abs_H_start;
         }
     }
 
