@@ -238,18 +238,28 @@ void free_device_arrays(DeviceArrays& d) {
     gpuErrchk(cudaFree(d.l2s));
 }
 
-ContinuationResult find_min_abs_H(const HostArrays& h, const int num_array_elements) {
+ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elements) {
     ContinuationResult res;
-    res.min_abs_H = 1e100;
+    res.r.cost = 1e100;
+    double best_score = 1e100;
 
-    // Find result with minimum absolute value of the hamiltonian and return that
     for (int k = 0; k < num_array_elements; ++k) {
+        // Squared distance from the final state to the origin
+        double dist_sq = h.thetas[k] * h.thetas[k] + h.phis[k] * h.phis[k];
+        
+        // How far off the stable manifold are we?
         double abs_H = std::abs(h.end_hamiltonians[k]);
-        if (abs_H < res.min_abs_H) {
-            res.min_abs_H = abs_H;
-            res.r.cost = h.costs[k];
+        
+        // Hybrid Score: heavily penalize trajectories with non-zero Hamiltonians
+        double score = dist_sq + (10.0 * abs_H); 
+        
+        if (score < best_score) {
+            best_score = score;
+            
+            res.r.cost = h.costs[k]; 
             res.r.l1 = h.l1s[k];
             res.r.l2 = h.l2s[k];
+            res.min_abs_H = abs_H;
         }
     }
 
@@ -278,7 +288,7 @@ ContinuationResult continuation_core(const SimulationParams& p) {
     free_device_arrays(d);
 
     // Return solution with minimum absolute value of final hamiltonian
-    return find_min_abs_H(h, num_array_elements);
+    return find_best_guess(h, num_array_elements);
 }
 
 SimulationParams get_simulation_params(double theta_init, double phi_init, double alpha) {
@@ -308,7 +318,7 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
 
     target_theta = wrap_theta(target_theta);
     double distance_from_origin = std::sqrt(target_theta * target_theta + target_phi * target_phi);
-    double num_continuation_steps = std::max(1, static_cast<int>(std::ceil(distance_from_origin / MAX_CONTINUATION_STEP_SIZE)));
+    int num_continuation_steps = std::max(1, static_cast<int>(std::ceil(distance_from_origin / MAX_CONTINUATION_STEP_SIZE)));
     double d_theta = target_theta / num_continuation_steps;     // How much to increment theta each continuation step
     double d_phi = target_phi / num_continuation_steps;         // How much to increment phi each continuation step
     
