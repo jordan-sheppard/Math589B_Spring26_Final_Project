@@ -248,7 +248,7 @@ ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elem
         double dist_sq = h.thetas[k] * h.thetas[k] + h.phis[k] * h.phis[k];
         
         // How far off the stable manifold are we?
-        double abs_H = std::abs(h.end_hamiltonians[k]);
+        double abs_H = std::abs(h.start_hamiltonians[k]);
         
         // Hybrid Score: heavily penalize trajectories with non-zero Hamiltonians
         double score = dist_sq + (10.0 * abs_H); 
@@ -292,7 +292,7 @@ ContinuationResult continuation_core(const SimulationParams& p) {
 }
 
 SimulationParams get_simulation_params(double theta_init, double phi_init, double alpha) {
-    const double T_MAX = 10.0;                    // Artificial final time
+    const double T_MAX = 5.0;                    // Artificial final time
     const double DT = 0.001;                      // Step size
     const std::size_t GRID_SIZE = 127;            // Number of gridpoints in 1 dimension (should be odd)
 
