@@ -65,6 +65,16 @@ struct SimulationParams {
     double phi_init;               // Initial angular velocity
 };
 
+struct DeviceArrays {
+    double* costs;
+    double* start_hamiltonians;
+    double* end_hamiltonians;
+    double* thetas;
+    double* phis;
+    double* l1s;
+    double* l2s;
+};
+
 struct Result {
     double l1;
     double l2;

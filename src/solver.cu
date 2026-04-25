@@ -39,6 +39,43 @@ StateVec evaluate_derivatives(const StateVec& y, const double alpha) {
 }
 
 __host__ __device__
+double evaluate_hamiltonian(const StateVec& y, const double alpha) {
+    double theta = y.data[0];
+    double phi   = y.data[1];
+    double l1    = y.data[2];
+    double l2    = y.data[3];
+
+    double sin_t = std::sin(theta);
+    double cos_t = std::cos(theta);
+    double l2_sq = l2 * l2;
+    double phi_sq = phi * phi;
+    double cos_t_sq = cos_t * cos_t;
+    double hamiltonian = 1 - cos_t + 0.5*phi_sq - 0.5*l2_sq*cos_t_sq + l1*phi + l2*(sin_t - alpha*phi);
+    return hamiltonian;
+}
+
+__host__ __device__
+double wrap_theta(const double theta) {
+    return std::atan2(std::sin(theta), std::cos(theta)); // Wraps to (-pi, pi]
+}
+
+__host__ __device__
+StateVec get_initial_state(const SimulationParams& p, int i, int j) {
+    // 1. Calculate the specific costate for this grid point
+    double l1_init = (p.l1_init_guess - p.search_radius) + (i * p.costate_step_size);
+    double l2_init = (p.l2_init_guess - p.search_radius) + (j * p.costate_step_size);
+
+    // 2. Set the initial state (theta, phi, l1, l2, initial_cost)
+    StateVec y;
+    y.data[0] = p.theta_init; 
+    y.data[1] = p.phi_init;   
+    y.data[2] = l1_init;      
+    y.data[3] = l2_init;      
+    y.data[4] = 0.0;          // Cost starts at zero
+    return y;
+}
+
+__host__ __device__
 StateVec rk4_step(const StateVec& y, const double dt, const double alpha) {
     // Create arrays to hold intermediate/final values 
     StateVec k1, k2, k3, k4, y_next;
@@ -61,47 +98,53 @@ StateVec rk4_step(const StateVec& y, const double dt, const double alpha) {
 }
 
 __host__ __device__
-StateVec run_simulation(const StateVec& y0, const double alpha, const double dt, const long num_timesteps) {
+StateVec run_simulation(const StateVec& y0, const SimulationParams& p) {
     // Run simulation with a given set of initial conditions
     StateVec current_state = y0;
-    
+
     // Run RK4 on this set of initial conditions
-    for (long i = 0; i < num_timesteps; ++i) {
-        current_state = rk4_step(current_state, dt, alpha);
+    for (long i = 0; i < p.num_timesteps; ++i) {
+        current_state = rk4_step(current_state, p.dt, p.alpha);
     }
 
     return current_state;
 }
 
+__host__ __device__
+void package_pre_run_parameters(const StateVec& y0, const SimulationParams& p,
+                                const int i, const int j,
+                                DeviceArrays& out_arrays) {
+    int out_array_idx = i * p.grid_size + j;    // Array index for results storage
+
+    out_arrays.start_hamiltonians[out_array_idx] = evaluate_hamiltonian(y0, p.alpha);   // Initial hamiltonian value for this run
+    out_arrays.l1s[out_array_idx]                = y0.data[2];                          // Initial lambda_1 value for this run
+    out_arrays.l2s[out_array_idx]                = y0.data[3];                          // Initial lambda_2 value for this run
+}
+
+__host__ __device__
+void package_post_run_parameters(const StateVec& y_final, const SimulationParams& p,
+                                 const int i, const int j,
+                                 DeviceArrays& out_arrays) {
+    int out_array_idx = i * p.grid_size + j;    // Array index for results storage
+    
+    out_arrays.end_hamiltonian[out_array_idx] = evaluate_hamiltonian(y_final, p.alpha); // Final Hamiltonian
+    out_arrays.costs[out_array_idx]           = y_final.data[4];                        // Accumulated cost
+    out_arrays.thetas[out_array_idx]          = wrap_theta(y_final.data[0]);            // Final angle
+    out_arrays.phis[out_array_idx]            = y_final.data[1];                        // Final angular velocity 
+}
+
 __global__
-void shooting_kernel(SimulationParams p, double* out_costs,
-		     double* out_l1s, double* out_l2s) {
+void shooting_kernel(SimulationParams p, DeviceArrays out_arrays) {
     // Calculate 2D grid coordinates for this specific thread
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
 
-    // Check if this thread is in bounds for search grid
+    // Only run kernel if we are in bounds of search grid
     if (i < p.grid_size && j < p.grid_size) {
-        // 1. Calculate the specific costate for this grid point
-        double l1_init = (p.l1_init_guess - p.search_radius) + (i * p.costate_step_size);
-        double l2_init = (p.l2_init_guess - p.search_radius) + (j * p.costate_step_size);
-
-        // 2. Set the initial state (theta, phi, l1, l2, initial_cost)
-        StateVec y;
-        y.data[0] = p.theta_init; 
-        y.data[1] = p.phi_init;   
-        y.data[2] = l1_init;      
-        y.data[3] = l2_init;      
-        y.data[4] = 0.0;          // Cost starts at zero
-
-        // 3. Run simulation using num_timesteps directly
-        y = run_simulation(y, p.alpha, p.dt, p.num_timesteps);
-
-        // 4. Record results in flat arrays
-        int idx = i * p.grid_size + j;
-        out_costs[idx] = y.data[4];       // Accumulated cost
-        out_l1s[idx]   = l1_init;         // Initial lambda_1 value for this run
-        out_l2s[idx]   = l2_init;         // Initial lambda_2 value for this run
+        y = get_initial_state(p, i, j);
+        package_pre_run_parameters(y, p, i, j, out_arrays);
+        y = run_simulation(y, p);
+        package_post_run_parameters(y, p, i, j, out_arrays);
     }
 }
 
