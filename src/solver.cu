@@ -127,7 +127,7 @@ void package_post_run_parameters(const StateVec& y_final, const SimulationParams
                                  DeviceArrays& out_arrays) {
     int out_array_idx = i * p.grid_size + j;    // Array index for results storage
     
-    out_arrays.end_hamiltonian[out_array_idx] = evaluate_hamiltonian(y_final, p.alpha); // Final Hamiltonian
+    out_arrays.end_hamiltonians[out_array_idx] = evaluate_hamiltonian(y_final, p.alpha); // Final Hamiltonian
     out_arrays.costs[out_array_idx]           = y_final.data[4];                        // Accumulated cost
     out_arrays.thetas[out_array_idx]          = wrap_theta(y_final.data[0]);            // Final angle
     out_arrays.phis[out_array_idx]            = y_final.data[1];                        // Final angular velocity 
@@ -312,7 +312,7 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
     double d_theta = target_theta / num_continuation_steps;     // How much to increment theta each continuation step
     double d_phi = target_phi / num_continuation_steps;         // How much to increment phi each continuation step
     
-    SimulationParams p = get_initial_simulation_params(d_theta, d_phi, alpha);
+    SimulationParams p = get_simulation_params(d_theta, d_phi, alpha);
     
     ContinuationResult current_res;
     for (int step = 1; step <= num_continuation_steps; ++step) {
@@ -338,14 +338,14 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
 }
 
 Result refined_grid_search(ContinuationResult res, double theta_target, double phi_target, double alpha) {
-    p = get_initial_simulation_params(target_theta, target_phi, alpha);
+    SimulationParams p = get_simulation_params(target_theta, target_phi, alpha);
     p.l1_init_guess = res.r.l1;
     p.l2_init_guess = res.r.l2;
     p.search_radius = 0.005;        // Very small search radius
     p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
 
     // Run the solver one last time
-    ContinuationResult final_res = continuation_core(polish_p);
+    ContinuationResult final_res = continuation_core(p);
     std::printf("FINAL REFINEMENT STEP: Min |H| = %f\n", final_res.min_abs_H);
     return final_res.r;
 }
