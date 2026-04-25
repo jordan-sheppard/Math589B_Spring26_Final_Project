@@ -326,13 +326,13 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
     
     ContinuationResult current_res;
     for (int step = 1; step <= num_continuation_steps; ++step) {
-        // Dynamically shrink the search radius as we get closer to the true solution.
-        // For the first step off the LQR, keep it wide. For later steps, shrink it 
-        // because our previous step's guess is highly accurate.
         if (step > 1) {
             p.theta_init = step * d_theta;
             p.phi_init   = step * d_phi;
-            p.search_radius = 0.05; 
+            
+            // Keep the search radius slightly adaptive so it doesn't suffocate 
+            // the non-linear curvature at larger angles
+            p.search_radius = std::max(0.05, 0.15 * std::abs(p.theta_init)); 
             p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
         }
 
@@ -340,10 +340,17 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
 
         std::printf("Step %d / %d: Min |H| = %f\n", step, num_continuation_steps, current_res.min_abs_H);
 
-        // Feed resulting costates directly in as initial guess for next step
-        p.l1_init_guess = current_res.r.l1;
-        p.l2_init_guess = current_res.r.l2;
-    }    
+        // Linearly scale the costate guess to reflect where the NEXT step should be.
+        if (step < num_continuation_steps) {
+            double scale_factor = static_cast<double>(step + 1) / step;
+            p.l1_init_guess = current_res.r.l1 * scale_factor;
+            p.l2_init_guess = current_res.r.l2 * scale_factor;
+        } else {
+            // For the final refinement pass, keep the exact guess
+            p.l1_init_guess = current_res.r.l1;
+            p.l2_init_guess = current_res.r.l2;
+        }
+    }  
     return current_res;
 }
 
