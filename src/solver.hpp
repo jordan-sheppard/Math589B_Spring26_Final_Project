@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef> // For std::size_t
+#include <vector>  // For std::vector
 
 constexpr std::size_t NUM_STATE_DIMS = 5;
 
@@ -75,10 +76,26 @@ struct DeviceArrays {
     double* l2s;
 };
 
+struct HostArrays {
+    std::vector<double> costs;
+    std::vector<double> start_hamiltonians;
+    std::vector<double> end_hamiltonians;
+    std::vector<double> thetas;
+    std::vector<double> phis;
+    std::vector<double> l1s;
+    std::vector<double> l2s;
+};
+
 struct Result {
     double l1;
     double l2;
     double cost;
 };
 
+struct ContinuationResult {
+    Result r;
+    double min_abs_H;
+};
+
+ContinuationResult solve_core(const SimulationParams& p);
 Result solve(double theta, double phi, double alpha);

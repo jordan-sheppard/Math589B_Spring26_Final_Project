@@ -141,7 +141,7 @@ void shooting_kernel(SimulationParams p, DeviceArrays out_arrays) {
 
     // Only run kernel if we are in bounds of search grid
     if (i < p.grid_size && j < p.grid_size) {
-        y = get_initial_state(p, i, j);
+        StateVec y = get_initial_state(p, i, j);
         package_pre_run_parameters(y, p, i, j, out_arrays);
         y = run_simulation(y, p);
         package_post_run_parameters(y, p, i, j, out_arrays);
@@ -156,8 +156,8 @@ void compute_lqr_guess(const double theta, const double phi, const double alpha,
     Eigen::Matrix4d A;
     A << 0.0,  1.0,    0.0, 0.0,
          1.0,  -alpha, 0.0, -1.0,
-	 -1.0, 0.0,    0.0, -1.0,
-	 0.0,  -1.0,  -1.0, alpha;
+	     -1.0, 0.0,    0.0, -1.0,
+	     0.0,  -1.0,  -1.0, alpha;
 
     // Solve for eigenvalues/eigenvectors of A
     Eigen::EigenSolver<Eigen::Matrix4d> solver(A);
@@ -166,13 +166,13 @@ void compute_lqr_guess(const double theta, const double phi, const double alpha,
 
     // Isolate stable manifold
     Eigen::Matrix<std::complex<double>, 4, 2> Vs;    // Columns are stable eigenvectors
+    
     std::size_t col = 0;
-
     for (std::size_t i = 0; i < 4; ++i) {
         if (eigenvalues(i).real() < 0 && col < 2) {
             Vs.col(col) = eigenvectors.col(i);
-	    col++;
-	}
+	        col++;
+	    }
     }
 
     // Partition stable manifold to state/costate components 
@@ -192,6 +192,95 @@ void compute_lqr_guess(const double theta, const double phi, const double alpha,
 
 }
 
+DeviceArrays allocate_device_arrays(int array_memory_size) {
+    DeviceArrays d;
+
+    cudaMalloc(&d.costs, array_memory_size);
+    cudaMalloc(&d.thetas, array_memory_size);
+    cudaMalloc(&d.phis, array_memory_size);
+    cudaMalloc(&d.l1s, array_memory_size);
+    cudaMalloc(&d.l2s, array_memory_size);
+    cudaMalloc(&d.start_hamiltonians, array_memory_size);
+    cudaMalloc(&d.end_hamiltonians, array_memory_size);
+
+    return d;
+}
+
+HostArrays copy_device_arrays_to_host(const DeviceArrays& d, const int num_array_elements,
+                                      const int array_memory_size) {
+    HostArrays h;
+    h.costs = std::vector<double>(num_array_elements);
+    h.start_hamiltonians = std::vector<double>(num_array_elements);
+    h.end_hamiltonians = std::vector<double>(num_array_elements);
+    h.thetas = std::vector<double>(num_array_elements);
+    h.phis = std::vector<double>(num_array_elements);
+    h.l1s = std::vector<double>(num_array_elements);
+    h.l2s = std::vector<double>(num_array_elements);
+
+    cudaMemcpy(h.costs.data(), d.costs, array_memory_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h.start_hamiltonians.data(), d.start_hamiltonians, array_memory_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h.end_hamiltonians.data(), d.end_hamiltonians, array_memory_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h.thetas.data(), d.thetas, array_memory_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h.phis.data(), d.phis, array_memory_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h.l1s.data(), d.l1s, array_memory_size, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h.l2s.data(), d.l2s, array_memory_size, cudaMemcpyDeviceToHost);
+
+    return h;
+}
+
+void free_device_arrays(DeviceArrays& d) {
+    cudaFree(d.costs);
+    cudaFree(d.start_hamiltonians);
+    cudaFree(d.end_hamiltonians);
+    cudaFree(d.thetas);
+    cudaFree(d.phis);
+    cudaFree(d.l1s);
+    cudaFree(d.l2s);
+}
+
+ContinuationResult find_min_abs_H(const HostArrays& h, const int num_array_elements) {
+    ContinuationResult res;
+    res.min_abs_H = 1e100;
+
+    // Find result with minimum absolute value of the hamiltonian and return that
+    for (int k = 0; k < num_array_elements; ++k) {
+        double abs_H = std::abs(h.end_hamiltonians[k]);
+        if (abs_H < res.min_abs_H) {
+            res.min_abs_H = abs_H;
+            res.r.cost = h.costs[k];
+            res.r.l1 = h.l1s[k];
+            res.r.l2 = h.l2s[k];
+        }
+    }
+
+    return res;
+}
+ 
+
+ContinuationResult solve_core(const SimulationParams& p) {
+    int num_array_elements = p.grid_size * p.grid_size;
+    int array_memory_size = num_array_elements * sizeof(double);
+
+    DeviceArrays d = allocate_device_arrays(array_memory_size);
+
+    // Configure Kernel Dimensions (Blocks and Threads)
+    // We use 16x16 threads per block (256 threads total per block)
+    dim3 threadsPerBlock(16, 16);
+    std::size_t num_containers = (p.grid_size + 15) / 16;
+    dim3 numBlocks(num_containers, num_containers);
+
+    // Launch CUDA Kernel & run shooting method in parallel
+    shooting_kernel<<<numBlocks, threadsPerBlock>>>(p, d);
+    cudaDeviceSynchronize();
+
+    // Copy results to host and cleanup CUDA memory
+    HostArrays h = copy_device_arrays_to_host(d, num_array_elements, array_memory_size);
+    free_device_arrays(d);
+
+    // Return solution with minimum absolute value of final hamiltonian
+    return find_min_abs_H(h, num_array_elements);
+}   
+
 Result solve(double theta, const double phi, const double alpha) {
     const double T_MAX = 5.0;                     // Artificial final time
     const double DT = 0.01;                       // Step size
@@ -199,11 +288,11 @@ Result solve(double theta, const double phi, const double alpha) {
     
     // Set up simulation parameters
     SimulationParams p;
-    p.theta_init = std::atan2(std::sin(theta), std::cos(theta));   // Standardizes theta to (-pi/2, pi/2]
-    p.phi_init = phi;
+    p.theta_init = wrap_theta(theta);   // Initial theta (-pi, pi]  -> TODO: Continuation uses "easier" guess
+    p.phi_init = phi;                   // Initial phi/angular vel. -> TODO: Continuation uses "easier" guess
     p.alpha = alpha;
-    p.dt = DT;
-    p.num_timesteps = static_cast<long>(T_MAX / DT);
+    p.dt = DT;                          // TODO: MAkE THIS ADAPTIVE WITH CONTINUATION
+    p.num_timesteps = static_cast<long>(T_MAX / DT);    // TODO: MAKE THIS ADAPTIVE WITH CONTINUATION
     p.grid_size = GRID_SIZE;
     p.search_radius = std::max(0.1, std::abs(p.theta_init) + std::abs(p.phi_init));	
     p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
@@ -211,54 +300,9 @@ Result solve(double theta, const double phi, const double alpha) {
     // Compute guess for costate initial conditions using LQR (store as parameters in p)
     compute_lqr_guess(p.theta_init, p.phi_init, p.alpha, p.l1_init_guess, p.l2_init_guess);
 
-    // Allocate results
-    std::size_t num_array_elements = p.grid_size * p.grid_size;
-    std::size_t array_memory_size = num_array_elements * sizeof(double);
-
-
-    // 1. Allocate GPU (Device) memory
-    double *d_costs, *d_l1s, *d_l2s;
-    cudaMalloc(&d_costs, array_memory_size);
-    cudaMalloc(&d_l1s, array_memory_size);
-    cudaMalloc(&d_l2s, array_memory_size);
-
-    // 2. Configure Kernel Dimensions (Blocks and Threads)
-    // We use 16x16 threads per block (256 threads total per block)
-    dim3 threadsPerBlock(16, 16);
-    std::size_t num_containers = (p.grid_size + 15) / 16;
-    dim3 numBlocks(num_containers, num_containers);
-
-    // 3. Launch CUDA Kernel to run shooting method in parallel
-    shooting_kernel<<<numBlocks, threadsPerBlock>>>(p, d_costs, d_l1s, d_l2s);    
+    // Solve using this initial guess
+    ContinuationResult res = solve_core(p);
     
-    // Wait for the GPU to finish
-    cudaDeviceSynchronize();
-
-    // 4. Copy results back to CPU (Host) memory
-    std::vector<double> h_costs(num_array_elements);
-    std::vector<double> h_l1s(num_array_elements);
-    std::vector<double> h_l2s(num_array_elements);
-
-    cudaMemcpy(h_costs.data(), d_costs, array_memory_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_l1s.data(), d_l1s, array_memory_size, cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_l2s.data(), d_l2s, array_memory_size, cudaMemcpyDeviceToHost);
-
-    // 5. Cleanup GPU memory
-    cudaFree(d_costs);
-    cudaFree(d_l1s);
-    cudaFree(d_l2s);
-
-    // 6: Find minimum cost parameters and return those.
-    Result r;
-    r.l1 = 1e100;
-    r.l2 = 1e100;
-    r.cost = 1e100;
-    for (int k = 0; k < num_array_elements; ++k) {
-        if (h_costs[k] < r.cost) {
-            r.cost = h_costs[k];
-            r.l1 = h_l1s[k];
-            r.l2 = h_l2s[k];
-        }
-    }
-    return r;
+    // TODO: IMPLEMENT CONTINUATION METHOD BY UPDATING p WITH NEW INITIAL GUESS
+    return res.r;
 }
