@@ -255,9 +255,8 @@ ContinuationResult find_min_abs_H(const HostArrays& h, const int num_array_eleme
 
     return res;
 }
- 
 
-ContinuationResult solve_core(const SimulationParams& p) {
+ContinuationResult continuation_core(const SimulationParams& p) {
     int num_array_elements = p.grid_size * p.grid_size;
     int array_memory_size = num_array_elements * sizeof(double);
 
@@ -280,30 +279,84 @@ ContinuationResult solve_core(const SimulationParams& p) {
 
     // Return solution with minimum absolute value of final hamiltonian
     return find_min_abs_H(h, num_array_elements);
-}   
+}
 
-Result solve(double theta, const double phi, const double alpha) {
+SimulationParams get_simulation_params(double theta_init, double phi_init, double alpha) {
     const double T_MAX = 5.0;                     // Artificial final time
-    const double DT = 0.01;                       // Step size
+    const double DT = 0.001;                      // Step size
     const std::size_t GRID_SIZE = 127;            // Number of gridpoints in 1 dimension (should be odd)
-    
-    // Set up simulation parameters
+
+    // Set up initial simulation parameters
     SimulationParams p;
-    p.theta_init = wrap_theta(theta);   // Initial theta (-pi, pi]  -> TODO: Continuation uses "easier" guess
-    p.phi_init = phi;                   // Initial phi/angular vel. -> TODO: Continuation uses "easier" guess
+
+    p.theta_init = theta_init;   // Initial theta (-pi, pi]  -> TODO: Continuation uses "easier" guess
+    p.phi_init = phi_init;                   // Initial phi/angular vel. -> TODO: Continuation uses "easier" guess
     p.alpha = alpha;
-    p.dt = DT;                          // TODO: MAkE THIS ADAPTIVE WITH CONTINUATION
-    p.num_timesteps = static_cast<long>(T_MAX / DT);    // TODO: MAKE THIS ADAPTIVE WITH CONTINUATION
+    p.dt = DT;
+    p.num_timesteps = static_cast<long>(T_MAX / DT);
     p.grid_size = GRID_SIZE;
     p.search_radius = std::max(0.1, std::abs(p.theta_init) + std::abs(p.phi_init));	
     p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
     
     // Compute guess for costate initial conditions using LQR (store as parameters in p)
     compute_lqr_guess(p.theta_init, p.phi_init, p.alpha, p.l1_init_guess, p.l2_init_guess);
+    return p;
+}
 
-    // Solve using this initial guess
-    ContinuationResult res = solve_core(p);
+ContinuationResult run_continuation(double target_theta, double target_phi, double alpha) {
+    const double MAX_CONTINUATION_STEP_SIZE = 0.05;
+
+    target_theta = wrap_theta(target_theta);
+    double distance_from_origin = std::sqrt(target_theta * target_theta + target_phi * target_phi);
+    double num_continuation_steps = std::max(1, static_cast<int>(std::ceil(distance_from_origin / MAX_CONTINUATION_STEP_SIZE)));
+    double d_theta = target_theta / num_continuation_steps;     // How much to increment theta each continuation step
+    double d_phi = target_phi / num_continuation_steps;         // How much to increment phi each continuation step
     
-    // TODO: IMPLEMENT CONTINUATION METHOD BY UPDATING p WITH NEW INITIAL GUESS
-    return res.r;
+    SimulationParams p = get_initial_simulation_params(d_theta, d_phi, alpha);
+    
+    ContinuationResult current_res;
+    for (int step = 1; step <= num_continuation_steps; ++step) {
+        // Dynamically shrink the search radius as we get closer to the true solution.
+        // For the first step off the LQR, keep it wide. For later steps, shrink it 
+        // because our previous step's guess is highly accurate.
+        if (step > 1) {
+            p.theta_init = step * d_theta;
+            p.phi_init   = step * d_phi;
+            p.search_radius = 0.05; 
+            p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
+        }
+
+        current_res = continuation_core(p);
+
+        std::printf("Step %d / %d: Min |H| = %f\n", step, num_continuation_steps, current_res.min_abs_H);
+
+        // Feed resulting costates directly in as initial guess for next step
+        p.l1_init_guess = current_res.r.l1;
+        p.l2_init_guess = current_res.r.l2;
+    }    
+    return current_res;
+}
+
+Result refined_grid_search(ContinuationResult res, double theta_target, double phi_target, double alpha) {
+    p = get_initial_simulation_params(target_theta, target_phi, alpha);
+    p.l1_init_guess = res.r.l1;
+    p.l2_init_guess = res.r.l2;
+    p.search_radius = 0.005;        // Very small search radius
+    p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
+
+    // Run the solver one last time
+    ContinuationResult final_res = continuation_core(polish_p);
+    std::printf("FINAL REFINEMENT STEP: Min |H| = %f\n", final_res.min_abs_H);
+    return final_res.r;
+}
+
+
+
+Result solve(double theta, double phi, double alpha) {
+    // Solve using continuation
+    ContinuationResult res = run_continuation(theta, phi, alpha);
+
+    // Do a polished, refined grid search near final guess from continuation.
+    Result r_polished = refined_grid_search(res, theta, phi, alpha);
+    return r_polished;
 }

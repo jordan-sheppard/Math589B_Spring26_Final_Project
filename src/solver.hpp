@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cuda_runtime.h>
 #include <cstddef> // For std::size_t
 #include <cstdio>
 #include <vector>  // For std::vector
@@ -114,5 +115,6 @@ struct ContinuationResult {
     double min_abs_H;
 };
 
-ContinuationResult solve_core(const SimulationParams& p);
+ContinuationResult continuation_core(const SimulationParams& p);
+Result run_continuation(double theta, double phi, double alpha);
 Result solve(double theta, double phi, double alpha);
