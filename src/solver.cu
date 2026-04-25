@@ -292,7 +292,7 @@ ContinuationResult continuation_core(const SimulationParams& p) {
 }
 
 SimulationParams get_simulation_params(double theta_init, double phi_init, double alpha) {
-    const double T_MAX = 5.0;                     // Artificial final time
+    const double T_MAX = 10.0;                    // Artificial final time
     const double DT = 0.001;                      // Step size
     const std::size_t GRID_SIZE = 127;            // Number of gridpoints in 1 dimension (should be odd)
 
@@ -330,9 +330,11 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
             p.theta_init = step * d_theta;
             p.phi_init   = step * d_phi;
             
-            // Keep the search radius slightly adaptive so it doesn't suffocate 
-            // the non-linear curvature at larger angles
-            p.search_radius = std::max(0.05, 0.15 * std::abs(p.theta_init)); 
+            // Calculate the magnitude of the current state vector
+            double current_state_mag = std::sqrt(p.theta_init * p.theta_init + p.phi_init * p.phi_init);
+            
+            // Scale the search radius by the full state magnitude
+            p.search_radius = std::max(0.05, 0.15 * current_state_mag); 
             p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
         }
 
@@ -351,6 +353,28 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
             p.l2_init_guess = current_res.r.l2;
         }
     }  
+
+    std::printf("Starting Microscope Refinement...\n");
+    
+    // Start the refinement with the radius we ended the continuation loop on
+    p.search_radius = std::max(0.05, 0.15 * std::abs(target_theta)); 
+
+    // Zoom in 4 times, shrinking the grid by 10x each time
+    for (int refine = 1; refine <= 4; ++refine) {
+        // Start the refinement with the radius we ended the continuation loop on
+        double target_state_mag = std::sqrt(target_theta * target_theta + target_phi * target_phi);
+        p.search_radius = std::max(0.05, 0.15 * target_state_mag);
+        p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
+        
+        current_res = continuation_core(p);
+        
+        std::printf("Refinement %d: Min |H| = %f\n", refine, current_res.min_abs_H);
+        
+        // Re-center the grid perfectly on the new, higher-precision guess
+        p.l1_init_guess = current_res.r.l1;
+        p.l2_init_guess = current_res.r.l2;
+    }
+    
     return current_res;
 }
 
