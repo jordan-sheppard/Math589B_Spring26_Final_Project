@@ -238,7 +238,7 @@ void free_device_arrays(DeviceArrays& d) {
     gpuErrchk(cudaFree(d.l2s));
 }
 
-ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elements) {
+ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elements, double guess_l1, double guess_l2) {
     ContinuationResult res;
     res.r.cost = 1e100;
     double best_score = 1e100;
@@ -247,8 +247,16 @@ ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elem
         double trajectory_cost = h.costs[k]; 
         double abs_H_start = std::abs(h.start_hamiltonians[k]);
         
-        // Massive penalty ensures H=0 is a hard constraint at all scales
-        double score = trajectory_cost + (1e9 * abs_H_start); 
+        // Calculate the physical distance from the continuous predictor
+        double dp_l1 = h.l1s[k] - guess_l1;
+        double dp_l2 = h.l2s[k] - guess_l2;
+        double dist_to_guess = std::sqrt(dp_l1 * dp_l1 + dp_l2 * dp_l2);
+        
+        // Hierarchy of constraints:
+        // 1. Physics: Must be on the H=0 surface (Massive 1e9 penalty)
+        // 2. Continuity: Must stay on the SAME manifold sheet (Heavy 1e5 penalty)
+        // 3. Cost: Lowest control effort (Natural tie-breaker for immediately adjacent grid cells)
+        double score = trajectory_cost + (1e9 * abs_H_start) + (1e5 * dist_to_guess); 
         
         if (score < best_score) {
             best_score = score;
@@ -259,6 +267,7 @@ ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elem
             res.min_abs_H = abs_H_start;
         }
     }
+
     return res;
 }
 ContinuationResult continuation_core(const SimulationParams& p) {
@@ -283,7 +292,7 @@ ContinuationResult continuation_core(const SimulationParams& p) {
     free_device_arrays(d);
 
     // Return solution with minimum absolute value of final hamiltonian
-    return find_best_guess(h, num_array_elements);
+    return find_best_guess(h, num_array_elements, p.l1_init_guess, p.l2_init_guess);
 }
 
 SimulationParams get_simulation_params(double theta_init, double phi_init, double alpha) {
