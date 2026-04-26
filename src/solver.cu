@@ -403,6 +403,7 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
     // March forward until we physically reach the target state
     ContinuationResult current_res;
     double max_norm_distance = linfty_norm(current_theta - target_theta, current_phi - target_phi);
+    int step_count = 1;
     while (max_norm_distance > 1e-6) {
         double dist_to_target = l2_norm(current_theta - target_theta, current_phi - target_phi);
 
@@ -425,10 +426,10 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
             // Apply predictor for all subsequent steps
             apply_predictor_and_grid(p, prev_l1, prev_l2, prev_delta_l1, prev_delta_l2, prev_ds, actual_ds);
         }
-        
+
         current_res = continuation_core(p);     // Run grid search to find points with minimal hamiltonian
         
-        std::printf("L-Infinity Distance from Target: %f ; Step size ds = %f\n", max_norm_distance, actual_ds);
+        std::printf("Step Number: %d ; L-Infinity Distance from Target: %f ; Step size ds = %f\n", step_count, max_norm_distance, actual_ds);
         std::printf("  |H| = %f\n", current_res.min_abs_H);
 
         // Trust Region Evaluation
@@ -448,6 +449,7 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
         
         // Step Accepted: Update our current position and state history
         std::printf("  Step size of ds=%f accepted! Moving on...\n", actual_ds);
+        step_count++;
         current_theta = p.theta_init;
         current_phi   = p.phi_init;
         
