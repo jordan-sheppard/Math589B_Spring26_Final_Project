@@ -308,93 +308,150 @@ SimulationParams get_simulation_params(double theta_init, double phi_init, doubl
     return p;
 }
 
-ContinuationResult run_continuation(double target_theta, double target_phi, double alpha) {
-    const double MAX_CONTINUATION_STEP_SIZE = 0.05;
+void apply_predictor_and_grid(SimulationParams& p, double prev_l1, double prev_l2, 
+                              double prev_delta_l1, double prev_delta_l2, 
+                              double prev_ds, double actual_ds) {
+    // 1. Calculate the derivatives with respect to the path length
+    double dl1_ds = (prev_ds > 0) ? (prev_delta_l1 / prev_ds) : 0.0;
+    double dl2_ds = (prev_ds > 0) ? (prev_delta_l2 / prev_ds) : 0.0;
+    
+    double max_derivative = linfty_norm(dl1_ds, dl2_ds);
+    
+    // 2. Scale the search radius by the derivative to catch acceleration
+    p.search_radius = std::max(0.05, 3.0 * max_derivative * actual_ds);
+    p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
 
-    target_theta = wrap_theta(target_theta);
-    double distance_from_origin = std::sqrt(target_theta * target_theta + target_phi * target_phi);
-    int num_continuation_steps = std::max(1, static_cast<int>(std::ceil(distance_from_origin / MAX_CONTINUATION_STEP_SIZE)));
-    double d_theta = target_theta / num_continuation_steps;     // How much to increment theta each continuation step
-    double d_phi = target_phi / num_continuation_steps;         // How much to increment phi each continuation step
+    // 3. Predict the next costates using a first-order Euler step
+    p.l1_init_guess = prev_l1 + (dl1_ds * actual_ds);
+    p.l2_init_guess = prev_l2 + (dl2_ds * actual_ds);
+}
+
+double adapt_step_size(double current_ds, double min_abs_H, double min_step_size, bool& accepted) {
+    const double SAFETY_FACTOR = 0.9;
+    const double H_ACCEPTANCE_THRESHOLD = 0.05;
+
+    if (min_abs_H > H_ACCEPTANCE_THRESHOLD) { 
+        // REJECT: We fell off the stable manifold.
+        accepted = false;
+        double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(0.05 / min_abs_H);
+        
+        // Clamp the shrinkage: don't shrink by more than 10x in a single rejection
+        return std::max(min_step_size, std::max(0.1 * current_ds, optimal_ds));
+    } 
+    else {
+        // ACCEPT: We successfully found the stable manifold.
+        accepted = true;
+        
+        // ADAPTIVE GROWTH: Use asymptotic scaling to safely grow the step size
+        if (min_abs_H < 0.005 && min_abs_H > 0.0) {
+            double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(0.05 / min_abs_H);
+            return std::min(0.2, std::min(2.0 * current_ds, optimal_ds)); 
+        }
+        
+        return current_ds;
+    }
+}
+
+ContinuationResult run_microscope_refinement(SimulationParams p, double prev_delta_l1, 
+                                             double prev_delta_l2, double prev_ds) {
+    const int NUM_CONTINUATION_STEPS = 8;
+
+    // Start refinement with the final, derivative-scaled search radius
+    double dl1_ds = (prev_ds > 0) ? (prev_delta_l1 / prev_ds) : 0.0;
+    double dl2_ds = (prev_ds > 0) ? (prev_delta_l2 / prev_ds) : 0.0;
+    double final_max_derivative = linf_norm(dl1_ds, dl2_ds);
     
-    SimulationParams p = get_simulation_params(d_theta, d_phi, alpha);
-    
-    // Track the previous costates (treat the origin 0,0 as step 0)
-    double prev_l1 = 0.0;
-    double prev_l2 = 0.0;
+    p.search_radius = std::max(0.05, 3.0 * final_max_derivative * prev_ds); 
     
     ContinuationResult current_res;
-    for (int step = 1; step <= num_continuation_steps; ++step) {
-        if (step > 1) {
-            p.theta_init = step * d_theta;
-            p.phi_init   = step * d_phi;
-            
-            double current_state_mag = std::sqrt(p.theta_init * p.theta_init + p.phi_init * p.phi_init);
-            
-            // Widen the net slightly to comfortably catch the non-linear bends
-            p.search_radius = std::max(0.1, 0.3 * current_state_mag); 
-            p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
-        }
 
-        current_res = continuation_core(p);
-
-        // THE FIX: Secant Extrapolation Predictor
-        if (step < num_continuation_steps) {
-            // Calculate the exact rate of change from the previous step
-            double delta_l1 = current_res.r.l1 - prev_l1;
-            double delta_l2 = current_res.r.l2 - prev_l2;
-
-            // Follow the curve to predict the next center
-            p.l1_init_guess = current_res.r.l1 + delta_l1;
-            p.l2_init_guess = current_res.r.l2 + delta_l2;
-
-            // Save the current states to act as the "previous" states for the next loop
-            prev_l1 = current_res.r.l1;
-            prev_l2 = current_res.r.l2;
-        } else {
-            // For the final microscope pass, keep the exact guess
-            p.l1_init_guess = current_res.r.l1;
-            p.l2_init_guess = current_res.r.l2;
-        }
-    }
-    
+    // Zoom in 8 times, shrinking by a mathematically safe factor of 0.4 each time
     std::printf("Starting Microscope Refinement...\n");
-    
-    double target_state_mag = std::sqrt(target_theta * target_theta + target_phi * target_phi);
-    p.search_radius = std::max(0.05, 0.15 * target_state_mag); 
-
-    // Zoom in 8 times, shrinking by a safe factor of 0.4 each time
-    for (int refine = 1; refine <= 8; ++refine) {
+    for (int refine = 1; refine <= NUM_CONTINUATION_STEPS; ++refine) {
         p.search_radius = p.search_radius * 0.4; 
         p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
         
         current_res = continuation_core(p);
-        
+
         std::printf("Refinement %d: Min |H| = %f\n", refine, current_res.min_abs_H);
         
-        // Re-center grid
+        // Re-center perfectly on the newly refined best guess
         p.l1_init_guess = current_res.r.l1;
         p.l2_init_guess = current_res.r.l2;
     }
 
     return current_res;
+}
+
+ContinuationResult run_continuation(double target_theta, double target_phi, double alpha) {
+    target_theta = wrap_theta(target_theta);
     
+    double ds = 0.1; 
+    const double MIN_STEP_SIZE = 1e-6; 
+    
+    double current_theta = 0.0;
+    double current_phi   = 0.0;
 
+    SimulationParams p = get_simulation_params(0.0, 0.0, alpha);
+    
+    double prev_l1 = p.l1_init_guess;
+    double prev_l2 = p.l2_init_guess;
+    double prev_delta_l1 = 0.0;
+    double prev_delta_l2 = 0.0;
+    double prev_ds = ds;
+
+    // March forward until we physically reach the target state
+    ContinuationResult current_res;
+    double max_norm_distance = linfty_norm(current_theta - target_theta, current_phi - target_phi);
+    while (max_norm_distance > 1e-6) {
+        double dist_to_target = l2_norm(current_theta - target_theta, current_phi - target_phi);
+
+        double actual_ds = std::min(ds, dist_to_target);    // Truncate to not overstep target, if necessary.
+        double ratio = actual_ds / dist_to_target;
+        
+        p.theta_init = current_theta + ratio * (target_theta - current_theta);
+        p.phi_init   = current_phi + ratio * (target_phi - current_phi);
+
+        apply_predictor_and_grid(p, prev_l1, prev_l2, prev_delta_l1, prev_delta_l2, prev_ds, actual_ds); // Creates initial guess/grid mesh sizing based on how steep stable manifold is
+
+        current_res = continuation_core(p);     // Run grid search to find points with minimal hamiltonian
+        
+        std::printf("L-Infinity Distance from Target: %f ; Step size ds = %f\n", max_norm_distance, actual_ds);
+        std::printf("  |H| = %f\n", current_res.min_abs_H);
+
+        // Trust Region Evaluation
+        bool step_accepted = false;
+        ds = adapt_step_size(ds, current_res.min_abs_H, MIN_STEP_SIZE, step_accepted);
+        
+        if (!step_accepted) {
+            // Step rejected! Either asymptote reached, or we will retry with a smaller dt.
+            if (ds <= MIN_STEP_SIZE) { 
+                // Safety Net: Asymptote reached
+                std::fprintf(stderr, "ERROR: Minimum step size insufficient for stability. Asymptote Reached. Exiting and returning last known good state...\n");
+                break;
+            } 
+            std::printf("  Step size of ds=%f rejected. Retrying with smaller ds...\n");
+            continue; // Retry with smaller ds
+        } 
+        
+        // Step Accepted: Update our current position and state history
+        std::printf("  Step size of ds=%f accepted!\n Moving on...");
+        current_theta = p.theta_init;
+        current_phi   = p.phi_init;
+        
+        prev_delta_l1 = current_res.r.l1 - prev_l1;
+        prev_delta_l2 = current_res.r.l2 - prev_l2;
+        
+        prev_l1 = current_res.r.l1;
+        prev_l2 = current_res.r.l2;
+        prev_ds = actual_ds;
+
+        max_norm_distance = linfty_norm(current_theta - target_theta, current_phi - target_phi);
+    }    
+
+    // Hand off to the microscope loop for the final polish
+    return run_microscope_refinement(p, prev_delta_l1, prev_delta_l2, prev_ds);
 }
-
-Result refined_grid_search(ContinuationResult res, double theta_target, double phi_target, double alpha) {
-    SimulationParams p = get_simulation_params(theta_target, phi_target, alpha);
-    p.l1_init_guess = res.r.l1;
-    p.l2_init_guess = res.r.l2;
-    p.search_radius = 0.005;        // Very small search radius
-    p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
-
-    // Run the solver one last time
-    ContinuationResult final_res = continuation_core(p);
-    std::printf("FINAL REFINEMENT STEP: Min |H| = %f\n", final_res.min_abs_H);
-    return final_res.r;
-}
-
 
 
 Result solve(double theta, double phi, double alpha) {

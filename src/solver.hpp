@@ -21,7 +21,17 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
    }
 }
 
-constexpr std::size_t NUM_STATE_DIMS = 5;
+// Evaluates the L2 norm of an (x,y) point
+inline double l2_norm(double x, double y) {
+    return std::sqrt(x * x + y * y);
+}
+
+// Evaluates the L-infinity norm (maximum absolute value) of an (x,y) point
+inline double linfty_norm(double x, double y) {
+    return std::max(std::abs(x), std::abs(y));
+}
+
+constexpr std::size_t NUM_STATE_DIMS = 5;       // Number of state dimensions (2 state, 2 costate, 1 cost)
 
 struct StateVec {
     double data[NUM_STATE_DIMS];
