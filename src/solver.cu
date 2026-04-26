@@ -412,8 +412,20 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
         p.theta_init = current_theta + ratio * (target_theta - current_theta);
         p.phi_init   = current_phi + ratio * (target_phi - current_phi);
 
-        apply_predictor_and_grid(p, prev_l1, prev_l2, prev_delta_l1, prev_delta_l2, prev_ds, actual_ds); // Creates initial guess/grid mesh sizing based on how steep stable manifold is
-
+        // 4. Grid Setup and Prediction
+        if (step_count == 1) {
+            // THE COLD START FIX: 
+            // We have no history for the derivative, but the LQR solution is perfect for small steps.
+            compute_lqr_guess(p.theta_init, p.phi_init, alpha, p.l1_init_guess, p.l2_init_guess);
+            
+            // Keep the radius tight so it doesn't accidentally swallow the unstable H=0 root
+            p.search_radius = 0.02; 
+            p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
+        } else {
+            // Apply predictor for all subsequent steps
+            apply_predictor_and_grid(p, prev_l1, prev_l2, prev_delta_l1, prev_delta_l2, prev_ds, actual_ds);
+        }
+        
         current_res = continuation_core(p);     // Run grid search to find points with minimal hamiltonian
         
         std::printf("L-Infinity Distance from Target: %f ; Step size ds = %f\n", max_norm_distance, actual_ds);
