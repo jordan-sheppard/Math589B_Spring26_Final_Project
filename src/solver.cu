@@ -352,28 +352,28 @@ double adapt_step_size(double current_ds, double min_abs_H, double min_step_size
     }
 }
 
-ContinuationResult run_microscope_refinement(SimulationParams p, double prev_delta_l1, 
-                                             double prev_delta_l2, double prev_ds) {
+ContinuationResult run_microscope_refinement(SimulationParams p, double best_l1, double best_l2, double last_radius) {
     const int NUM_CONTINUATION_STEPS = 8;
+    const double SHRINKING_FACTOR = 0.4;
 
-    // Start refinement with the final, derivative-scaled search radius
-    double dl1_ds = (prev_ds > 0) ? (prev_delta_l1 / prev_ds) : 0.0;
-    double dl2_ds = (prev_ds > 0) ? (prev_delta_l2 / prev_ds) : 0.0;
-    double final_max_derivative = linfty_norm(dl1_ds, dl2_ds);
-    
-    p.search_radius = std::max(0.05, 3.0 * final_max_derivative * prev_ds); 
-    
+    // 1. Center perfectly on the best guess from the continuation phase
+    p.l1_init_guess = best_l1;
+    p.l2_init_guess = best_l2;
+
+    // 2. Start the zoom using the exact radius of the grid that found this point
+    p.search_radius = last_radius;
+
     ContinuationResult current_res;
 
     // Zoom in 8 times, shrinking by a mathematically safe factor of 0.4 each time
     std::printf("Starting Microscope Refinement...\n");
     for (int refine = 1; refine <= NUM_CONTINUATION_STEPS; ++refine) {
-        p.search_radius = p.search_radius * 0.4; 
+        p.search_radius = p.search_radius * SHRINKING_FACTOR; 
         p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
         
         current_res = continuation_core(p);
 
-        std::printf("Refinement %d: Min |H| = %f\n", refine, current_res.min_abs_H);
+        std::printf("  Microscope Refinement %d: Min |H| = %f\n", refine, current_res.min_abs_H);
         
         // Re-center perfectly on the newly refined best guess
         p.l1_init_guess = current_res.r.l1;
@@ -464,7 +464,7 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
     }    
 
     // Hand off to the microscope loop for the final polish
-    return run_microscope_refinement(p, prev_delta_l1, prev_delta_l2, prev_ds);
+    return run_microscope_refinement(p, prev_l1, prev_l2, p.search_radius);
 }
 
 
