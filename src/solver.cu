@@ -359,7 +359,7 @@ ContinuationResult run_microscope_refinement(SimulationParams p, double prev_del
     // Start refinement with the final, derivative-scaled search radius
     double dl1_ds = (prev_ds > 0) ? (prev_delta_l1 / prev_ds) : 0.0;
     double dl2_ds = (prev_ds > 0) ? (prev_delta_l2 / prev_ds) : 0.0;
-    double final_max_derivative = linf_norm(dl1_ds, dl2_ds);
+    double final_max_derivative = linfty_norm(dl1_ds, dl2_ds);
     
     p.search_radius = std::max(0.05, 3.0 * final_max_derivative * prev_ds); 
     
@@ -430,12 +430,12 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
                 std::fprintf(stderr, "ERROR: Minimum step size insufficient for stability. Asymptote Reached. Exiting and returning last known good state...\n");
                 break;
             } 
-            std::printf("  Step size of ds=%f rejected. Retrying with smaller ds...\n");
+            std::printf("  Step size of ds=%f rejected. Retrying with smaller ds...\n", actual_ds);
             continue; // Retry with smaller ds
         } 
         
         // Step Accepted: Update our current position and state history
-        std::printf("  Step size of ds=%f accepted!\n Moving on...");
+        std::printf("  Step size of ds=%f accepted! Moving on...\n", actual_ds);
         current_theta = p.theta_init;
         current_phi   = p.phi_init;
         
