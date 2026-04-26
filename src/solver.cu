@@ -319,36 +319,45 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
     
     SimulationParams p = get_simulation_params(d_theta, d_phi, alpha);
     
+    // Track the previous costates (treat the origin 0,0 as step 0)
+    double prev_l1 = 0.0;
+    double prev_l2 = 0.0;
+    
     ContinuationResult current_res;
     for (int step = 1; step <= num_continuation_steps; ++step) {
         if (step > 1) {
             p.theta_init = step * d_theta;
             p.phi_init   = step * d_phi;
             
-            // Calculate the magnitude of the current state vector
             double current_state_mag = std::sqrt(p.theta_init * p.theta_init + p.phi_init * p.phi_init);
             
-            // Scale the search radius by the full state magnitude
-            p.search_radius = std::max(0.05, 0.15 * current_state_mag); 
+            // Widen the net slightly to comfortably catch the non-linear bends
+            p.search_radius = std::max(0.1, 0.3 * current_state_mag); 
             p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
         }
 
         current_res = continuation_core(p);
 
-        std::printf("Step %d / %d: Min |H| = %f\n", step, num_continuation_steps, current_res.min_abs_H);
-
-        // Linearly scale the costate guess to reflect where the NEXT step should be.
+        // THE FIX: Secant Extrapolation Predictor
         if (step < num_continuation_steps) {
-            double scale_factor = static_cast<double>(step + 1) / step;
-            p.l1_init_guess = current_res.r.l1 * scale_factor;
-            p.l2_init_guess = current_res.r.l2 * scale_factor;
+            // Calculate the exact rate of change from the previous step
+            double delta_l1 = current_res.r.l1 - prev_l1;
+            double delta_l2 = current_res.r.l2 - prev_l2;
+
+            // Follow the curve to predict the next center
+            p.l1_init_guess = current_res.r.l1 + delta_l1;
+            p.l2_init_guess = current_res.r.l2 + delta_l2;
+
+            // Save the current states to act as the "previous" states for the next loop
+            prev_l1 = current_res.r.l1;
+            prev_l2 = current_res.r.l2;
         } else {
-            // For the final refinement pass, keep the exact guess
+            // For the final microscope pass, keep the exact guess
             p.l1_init_guess = current_res.r.l1;
             p.l2_init_guess = current_res.r.l2;
         }
-    }  
-
+    }
+    
     std::printf("Starting Microscope Refinement...\n");
     
     double target_state_mag = std::sqrt(target_theta * target_theta + target_phi * target_phi);
