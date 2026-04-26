@@ -244,15 +244,11 @@ ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elem
     double best_score = 1e100;
 
     for (int k = 0; k < num_array_elements; ++k) {
-        // The accumulated cost naturally penalizes trajectories that blow up or dive-bomb
         double trajectory_cost = h.costs[k]; 
-        
-        // The starting Hamiltonian perfectly identifies the stable manifold energy surface
         double abs_H_start = std::abs(h.start_hamiltonians[k]);
         
-        // The Ultimate Metric: Minimize cost, but strictly enforce the H=0 physics
-        // We use a massive penalty (10000.0) to treat H=0 as a hard constraint
-        double score = trajectory_cost + (10000.0 * abs_H_start); 
+        // Massive penalty ensures H=0 is a hard constraint at all scales
+        double score = trajectory_cost + (1e9 * abs_H_start); 
         
         if (score < best_score) {
             best_score = score;
@@ -263,10 +259,8 @@ ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elem
             res.min_abs_H = abs_H_start;
         }
     }
-
     return res;
 }
-
 ContinuationResult continuation_core(const SimulationParams& p) {
     int num_array_elements = p.grid_size * p.grid_size;
     int array_memory_size = num_array_elements * sizeof(double);
@@ -357,26 +351,26 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
 
     std::printf("Starting Microscope Refinement...\n");
     
-    // Start the refinement with the radius we ended the continuation loop on
-    p.search_radius = std::max(0.05, 0.15 * std::abs(target_theta)); 
+    double target_state_mag = std::sqrt(target_theta * target_theta + target_phi * target_phi);
+    p.search_radius = std::max(0.05, 0.15 * target_state_mag); 
 
-    // Zoom in 4 times, shrinking the grid by 10x each time
-    for (int refine = 1; refine <= 4; ++refine) {
-        // Start the refinement with the radius we ended the continuation loop on
-        double target_state_mag = std::sqrt(target_theta * target_theta + target_phi * target_phi);
-        p.search_radius = std::max(0.05, 0.15 * target_state_mag);
+    // Zoom in 8 times, shrinking by a safe factor of 0.4 each time
+    for (int refine = 1; refine <= 8; ++refine) {
+        p.search_radius = p.search_radius * 0.4; 
         p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
         
         current_res = continuation_core(p);
         
         std::printf("Refinement %d: Min |H| = %f\n", refine, current_res.min_abs_H);
         
-        // Re-center the grid perfectly on the new, higher-precision guess
+        // Re-center grid
         p.l1_init_guess = current_res.r.l1;
         p.l2_init_guess = current_res.r.l2;
     }
-    
+
     return current_res;
+    
+
 }
 
 Result refined_grid_search(ContinuationResult res, double theta_target, double phi_target, double alpha) {
@@ -397,8 +391,5 @@ Result refined_grid_search(ContinuationResult res, double theta_target, double p
 Result solve(double theta, double phi, double alpha) {
     // Solve using continuation
     ContinuationResult res = run_continuation(theta, phi, alpha);
-
-    // Do a polished, refined grid search near final guess from continuation.
-    Result r_polished = refined_grid_search(res, theta, phi, alpha);
-    return r_polished;
+    return res.r;
 }
