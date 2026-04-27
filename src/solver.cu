@@ -53,7 +53,7 @@ double evaluate_hamiltonian(const StateVec& y, const double alpha) {
 __host__ __device__
 double wrap_theta(const double theta) {
     double sin_t, cos_t;
-    sincos(theta, sin_t, cos_t);
+    sincos(theta, &sin_t, &cos_t);
     return std::atan2(sin_t, cos_t); // Wraps to (-pi, pi]
 }
 
@@ -111,7 +111,7 @@ void backward_rk4_kernel(BackwardSweepParams p, DeviceArrays out) {
             double f = get_crossing_interpolation_factor(p.target_theta, prev_state.theta, current_state.theta);
             
             StateVec hit_state = prev_state + f * (current_state - prev_state);
-            double hit_time = current_t + (f * p.dt);
+            double hit_time = prev_t + (f * p.dt);
 
             out.hit_points[traj_idx].state = hit_state;
             out.hit_points[traj_idx].time = hit_time;
@@ -237,7 +237,7 @@ TrajectoryPoint find_closest_point(const std::vector<TrajectoryPoint>& hit_point
             }
         }
     }
-    return hit_points[i];
+    return hit_points[best_idx];
 }
 
 
