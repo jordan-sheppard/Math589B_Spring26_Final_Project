@@ -342,7 +342,7 @@ double adapt_step_size(double current_ds, double min_abs_H, double min_step_size
     if (min_abs_H > H_ACCEPTANCE_THRESHOLD) { 
         // REJECT: We fell off the stable manifold.
         accepted = false;
-        double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(0.05 / min_abs_H);
+        double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(H_ACCEPTANCE_THRESHOLD / min_abs_H);
         
         // Clamp the shrinkage: don't shrink by more than 10x in a single rejection
         return std::max(min_step_size, std::max(0.1 * current_ds, optimal_ds));
@@ -352,8 +352,13 @@ double adapt_step_size(double current_ds, double min_abs_H, double min_step_size
         accepted = true;
         
         // ADAPTIVE GROWTH: Use asymptotic scaling to safely grow the step size
-        if (min_abs_H < 0.005 && min_abs_H > 0.0) {
-            double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(0.05 / min_abs_H);
+        // Only grow if we are significantly below the threshold (e.g., 10x smaller)
+        if (min_abs_H < (H_ACCEPTANCE_THRESHOLD * 0.1) && min_abs_H > 0.0) {
+            
+            // THE FIX: Update the numerator here as well!
+            double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(H_ACCEPTANCE_THRESHOLD / min_abs_H);
+            
+            // Cap absolute maximum step size to 0.05, limit growth to 1.5x
             return std::min(0.05, std::min(1.5 * current_ds, optimal_ds)); 
         }
         
@@ -443,7 +448,7 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
 
         // Trust Region Evaluation
         bool step_accepted = false;
-        ds = adapt_step_size(ds, current_res.min_abs_H, MIN_STEP_SIZE, step_accepted);
+        ds = adapt_step_size(actual_ds, current_res.min_abs_H, MIN_STEP_SIZE, step_accepted);
         
         if (!step_accepted) {
             // Step rejected! Either asymptote reached, or we will retry with a smaller dt.
