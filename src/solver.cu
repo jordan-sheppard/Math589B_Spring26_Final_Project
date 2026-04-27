@@ -256,7 +256,7 @@ ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elem
         // 1. Physics: Must be on the H=0 surface (Massive 1e9 penalty)
         // 2. Continuity: Must stay on the SAME manifold sheet (Heavy 1e5 penalty)
         // 3. Cost: Lowest control effort (Natural tie-breaker for immediately adjacent grid cells)
-        double score = trajectory_cost + (1e9 * abs_H_start) + (1e5 * dist_to_guess); 
+        double score = (1e9 * abs_H_start) + (1e5 * dist_to_guess); 
         
         if (score < best_score) {
             best_score = score;
@@ -327,7 +327,7 @@ void apply_predictor_and_grid(SimulationParams& p, double prev_l1, double prev_l
     double max_derivative = linfty_norm(dl1_ds, dl2_ds);
     
     // 2. Scale the search radius by the derivative to catch acceleration
-    p.search_radius = std::max(0.05, 3.0 * max_derivative * actual_ds);
+    p.search_radius = std::max(0.05, 1.5 * max_derivative * actual_ds);
     p.costate_step_size = (p.grid_size > 1) ? (2.0 * p.search_radius) / (p.grid_size - 1) : 0;
 
     // 3. Predict the next costates using a first-order Euler step
@@ -337,7 +337,7 @@ void apply_predictor_and_grid(SimulationParams& p, double prev_l1, double prev_l
 
 double adapt_step_size(double current_ds, double min_abs_H, double min_step_size, bool& accepted) {
     const double SAFETY_FACTOR = 0.9;
-    const double H_ACCEPTANCE_THRESHOLD = 0.05;
+    const double H_ACCEPTANCE_THRESHOLD = 0.0005;
 
     if (min_abs_H > H_ACCEPTANCE_THRESHOLD) { 
         // REJECT: We fell off the stable manifold.
@@ -354,7 +354,7 @@ double adapt_step_size(double current_ds, double min_abs_H, double min_step_size
         // ADAPTIVE GROWTH: Use asymptotic scaling to safely grow the step size
         if (min_abs_H < 0.005 && min_abs_H > 0.0) {
             double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(0.05 / min_abs_H);
-            return std::min(0.2, std::min(2.0 * current_ds, optimal_ds)); 
+            return std::min(0.05, std::min(1.5 * current_ds, optimal_ds)); 
         }
         
         return current_ds;
