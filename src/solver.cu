@@ -105,6 +105,15 @@ StateVec run_simulation(const StateVec& y0, const SimulationParams& p) {
     // Run RK4 on this set of initial conditions
     for (long i = 0; i < p.num_timesteps; ++i) {
         current_state = rk4_step(current_state, p.dt, p.alpha);
+        
+        double theta = current_state.data[0];
+        double phi = current_state.data[1];
+        if (std::abs(theta) > 2.0 * M_PI || std::abs(phi) > 100.0) {
+            // The pendulum has fallen over or is spinning violently.
+            // Apply a massive penalty and break out of the loop early to save GPU time!
+            cost += 1e100; 
+            break; 
+        }
     }
 
     return current_state;
@@ -255,8 +264,8 @@ ContinuationResult find_best_guess(const HostArrays& h, const int num_array_elem
         // Hierarchy of constraints:
         // 1. Physics: Must be on the H=0 surface (Massive 1e9 penalty)
         // 2. Continuity: Must stay on the SAME manifold sheet (Heavy 1e5 penalty)
-        // 3. Cost: Lowest control effort (Natural tie-breaker for immediately adjacent grid cells)
-        double score = (1e9 * abs_H_start) + (1e5 * dist_to_guess); 
+        // 3. Accuracy: Must actually catch the pendulum (high cost = didn't catch it.)
+        double score = trajectory_cost + (1e9 * abs_H_start) + (1e5 * dist_to_guess); 
         
         if (score < best_score) {
             best_score = score;
@@ -335,14 +344,14 @@ void apply_predictor_and_grid(SimulationParams& p, double prev_l1, double prev_l
     p.l2_init_guess = prev_l2 + (dl2_ds * actual_ds);
 }
 
-double adapt_step_size(double current_ds, double min_abs_H, double min_step_size, bool& accepted) {
-    const double SAFETY_FACTOR = 0.9;
-    const double H_ACCEPTANCE_THRESHOLD = 0.0005;
+double adapt_step_size(double current_ds, double min_abs_H, double min_step_size, bool& accepted, double lambda_mag) {
+    const double SAFETY_FACTOR = 0.9; 
+    double h_acceptance_threshold = std::max(0.0005, 1e-8 * lambda_mag * lambda_mag); // Base threshold of 0.0005 near the origin, but relaxes as lambda squares
 
-    if (min_abs_H > H_ACCEPTANCE_THRESHOLD) { 
+    if (min_abs_H > h_acceptance_threshold) { 
         // REJECT: We fell off the stable manifold.
         accepted = false;
-        double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(H_ACCEPTANCE_THRESHOLD / min_abs_H);
+        double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(h_acceptance_threshold / min_abs_H);
         
         // Clamp the shrinkage: don't shrink by more than 10x in a single rejection
         return std::max(min_step_size, std::max(0.1 * current_ds, optimal_ds));
@@ -353,10 +362,10 @@ double adapt_step_size(double current_ds, double min_abs_H, double min_step_size
         
         // ADAPTIVE GROWTH: Use asymptotic scaling to safely grow the step size
         // Only grow if we are significantly below the threshold (e.g., 10x smaller)
-        if (min_abs_H < (H_ACCEPTANCE_THRESHOLD * 0.1) && min_abs_H > 0.0) {
+        if (min_abs_H < (h_acceptance_threshold * 0.1) && min_abs_H > 0.0) {
             
             // THE FIX: Update the numerator here as well!
-            double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(H_ACCEPTANCE_THRESHOLD / min_abs_H);
+            double optimal_ds = current_ds * SAFETY_FACTOR * std::sqrt(h_acceptance_threshold / min_abs_H);
             
             // Cap absolute maximum step size to 0.05, limit growth to 1.5x
             return std::min(0.05, std::min(1.5 * current_ds, optimal_ds)); 
@@ -448,7 +457,8 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
 
         // Trust Region Evaluation
         bool step_accepted = false;
-        ds = adapt_step_size(actual_ds, current_res.min_abs_H, MIN_STEP_SIZE, step_accepted);
+        double lambda_mag = linfty_norm(p.l1_init_guess, p.l2_init_guess);
+        ds = adapt_step_size(actual_ds, current_res.min_abs_H, MIN_STEP_SIZE, step_accepted, lambda_mag);
         
         if (!step_accepted) {
             // Step rejected! Either asymptote reached, or we will retry with a smaller dt.
