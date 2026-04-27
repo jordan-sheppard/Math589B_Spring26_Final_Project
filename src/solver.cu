@@ -243,9 +243,9 @@ TrajectoryPoint find_closest_point(const std::vector<TrajectoryPoint>& hit_point
 
 TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     const double DT = -0.005;            // Timestep size (negative since running in backwards time)
-    const double T_MAX = -5.0;           // Max NEGATIVE time to run to
-    const int NUM_TRAJECTORIES = 1000;   // Number of trajectories to shoot off
-    const double INITIAL_RADIUS = 1e-4;  // Radius of initial states about origin
+    const double T_MAX = -20.0;           // Max NEGATIVE time to run to
+    const int NUM_TRAJECTORIES = 1000000;   // Number of trajectories to shoot off
+    const double INITIAL_RADIUS = 1e-3;  // Radius of initial states about origin
     
     // Set up parameters for backwards sweep
     BackwardSweepParams p;
