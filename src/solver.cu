@@ -111,7 +111,7 @@ StateVec run_simulation(const StateVec& y0, const SimulationParams& p) {
         if (std::abs(theta) > 2.0 * M_PI || std::abs(phi) > 100.0) {
             // The pendulum has fallen over or is spinning violently.
             // Apply a massive penalty and break out of the loop early to save GPU time!
-            current.state[4] += 1e15;   // Add HUGE penalty to cost
+            current_state[4] += 1e15;   // Add HUGE penalty to cost
             break; 
         }
     }
