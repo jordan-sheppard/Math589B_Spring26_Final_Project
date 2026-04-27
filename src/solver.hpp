@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <cstddef> // For std::size_t
+#include <cstddef>   // For std::size_t
 #include <cstdio>
-#include <vector>  // For std::vector
+#include <cmath>     // For std::sqrt and std::abs
+#include <algorithm> // For std::max
+#include <vector>    // For std::vector
 
 // The macro captures the file name and line number where a GPU error occurred
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
@@ -22,48 +24,77 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
 }
 
 // Evaluates the L2 norm of an (x,y) point
-inline double l2_norm(double x, double y) {
+__host__ __device__ inline double l2_norm(double x, double y) {
     return std::sqrt(x * x + y * y);
 }
 
 // Evaluates the L-infinity norm (maximum absolute value) of an (x,y) point
-inline double linfty_norm(double x, double y) {
+__host__ __device__ inline double linfty_norm(double x, double y) {
     return std::max(std::abs(x), std::abs(y));
 }
 
 constexpr std::size_t NUM_STATE_DIMS = 5;       // Number of state dimensions (2 state, 2 costate, 1 cost)
 
 struct StateVec {
-    double data[NUM_STATE_DIMS];
+    double theta(0.0);
+    double phi(0.0);
+    double lambda_1(0.0);
+    double lambda_2(0.0);
+    double cost(0.0);
 
     __host__ __device__ StateVec() {}
 
-    __host__ __device__ double get(int i) const { return data[i]; }
-    __host__ __device__ void set(int i, double val) { data[i] = val; }
+    // Overload the [] operator to return a reference to the right variable
+    __host__ __device__
+    double& operator[](int index) {
+        // Note: In CUDA, switch statements compile down to very fast jump tables
+        switch(index) {
+            case 0: return theta;
+            case 1: return phi;
+            case 2: return lambda_1;
+            case 3: return lambda_2;
+            case 4: return cost;
+            default: return cost; // Fallback
+        }
+    }
+    
+    // Also provide a const version for read-only access
+    __host__ __device__
+    const double& operator[](int index) const {
+        switch(index) {
+            case 0: return theta;
+            case 1: return phi;
+            case 2: return lambda_1;
+            case 3: return lambda_2;
+            case 4: return cost;
+            default: return cost;
+        }
+    }
 
     __host__ __device__
     StateVec operator+(const StateVec& other) const {
         StateVec result;
-	for (std::size_t i = 0; i < NUM_STATE_DIMS; ++i) {
-            result.data[i] = this->data[i] + other.data[i];
-	}
-	return result;
+        for (std::size_t i = 0; i < NUM_STATE_DIMS; ++i) {
+            // Notice the (*this)[i] to properly call your overloaded operator
+            result[i] = (*this)[i] + other[i];
+        }
+        return result;
     }
 
     __host__ __device__
     StateVec operator-(const StateVec& other) const {
         StateVec result;
         for (std::size_t i = 0; i < NUM_STATE_DIMS; ++i) {
-            result.data[i] = this->data[i] - other.data[i];
+            result[i] = (*this)[i] - other[i];
         }
         return result;
     }
 
     __host__ __device__
     StateVec operator*(double scalar) const {
-	StateVec result;
-	for (std::size_t i = 0; i < NUM_STATE_DIMS; ++i) {
-            result.data[i] = this->data[i] * scalar;
+        StateVec result;
+        for (std::size_t i = 0; i < NUM_STATE_DIMS; ++i) {
+            result[i] = (*this)[i] * scalar;
         }
         return result;
     }
@@ -75,43 +106,46 @@ inline StateVec operator*(double scalar, const StateVec& vec) {
     return vec * scalar;
 }
 
+struct TrajectoryPoint {
+    double time;
+    StateVec state;
+};
 
-struct SimulationParams {
-    // Friction parameters
+struct BackwardSweepParams {
     double alpha;                  // Friction constant
-    double dt;                     // Timestep size
+    double dt;                     // Timestep size (will be NEGATIVE)
+    long num_timesteps;            // Number of timesteps
+    int num_trajectories;          // How many points are in our seed ring
+};
+
+struct ForwardSweepParams {
+    double alpha;                  // Friction constant
+    double dt;                     // Timestep size (will be POSITIVE)
     long num_timesteps;            // Number of timesteps
     
-    // Search Grid parameters
-    double l1_init_guess;          // Initial (LQR) Guess for lambda_1 costate
-    double l2_init_guess;          // Initial (LQR) Guess for lambda_2 costate
-    double search_radius;          // Search radius to left/right/up/down of this guess
-    double costate_step_size;      // How big each step is
-    int grid_size;                 // How many entries are in each dimension
+    // The exact physical state we want to start the pendulum at
+    double target_theta;
+    double target_phi;
 
-    // Initial pendulum state (fixed)
-    double theta_init;             // Initial angle
-    double phi_init;               // Initial angular velocity
+    // The interpolated guess from the Backward Sweep
+    double l1_guess;
+    double l2_guess;
+    
+    // Grid parameters
+    double search_radius;          // Very small now! (e.g., 0.05)
+    int grid_size;                 // E.g., 128 (for a 128x128 high-res zoom)
 };
 
 struct DeviceArrays {
-    double* costs;
     double* start_hamiltonians;
     double* end_hamiltonians;
-    double* thetas;
-    double* phis;
-    double* l1s;
-    double* l2s;
+    TrajectoryPoint* data;
 };
 
 struct HostArrays {
-    std::vector<double> costs;
     std::vector<double> start_hamiltonians;
     std::vector<double> end_hamiltonians;
-    std::vector<double> thetas;
-    std::vector<double> phis;
-    std::vector<double> l1s;
-    std::vector<double> l2s;
+    std::vector<TrajectoryPoint> data;
 };
 
 struct Result {
@@ -120,11 +154,4 @@ struct Result {
     double cost;
 };
 
-struct ContinuationResult {
-    Result r;
-    double min_abs_H;
-};
-
-ContinuationResult continuation_core(const SimulationParams& p);
-ContinuationResult run_continuation(double theta_target, double phi_target, double alpha);
 Result solve(double theta, double phi, double alpha);
