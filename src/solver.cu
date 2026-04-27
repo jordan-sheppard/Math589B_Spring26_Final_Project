@@ -385,7 +385,7 @@ ContinuationResult run_microscope_refinement(SimulationParams p, double best_l1,
 
     // 2. Start the zoom using the exact radius of the grid that found this point
     p.search_radius = last_radius;
-
+    p.grid_size = 127;		   // Fine grid size for microscope refinement.
     ContinuationResult current_res;
 
     // Zoom in 8 times, shrinking by a mathematically safe factor of 0.4 each time
@@ -435,7 +435,7 @@ ContinuationResult run_continuation(double target_theta, double target_phi, doub
         
         p.theta_init = current_theta + ratio * (target_theta - current_theta);
         p.phi_init   = current_phi + ratio * (target_phi - current_phi);
-
+        p.grid_size  = 63;  // Coarse grid for continuation runs
         // 4. Grid Setup and Prediction
         if (step_count == 1) {
             // THE COLD START FIX: 
