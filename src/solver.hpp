@@ -143,6 +143,7 @@ struct DeviceArrays {
     double* start_hamiltonians;
     double* end_hamiltonians;
     TrajectoryPoint* hit_points;
+    StateVec* seed_ring;
 };
 
 struct HostArrays {

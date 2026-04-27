@@ -71,9 +71,9 @@ StateVec rk4_step(const StateVec& y, const double dt, const double alpha) {
 __host__ __device__
 bool crossed_target_plane(double target_theta, double prev_theta, double curr_theta) {
     // Only trigger if pendulum is moving AWAY from origin towards target_theta
-    // (backwards time approaching from stable equilibrium)
-    bool sign_flip = (target_theta - prev_theta) * (target_theta - curr_theta) < 0;
-    bool moving_out = (curr_theta > prev_theta); 
+    // (backwards time -> approaching target_theta from stable equilibrium/origin)
+    bool sign_flip = (target_theta - prev_theta) * (target_theta - curr_theta) < 0; // Crossed target plane theta value
+    bool moving_out = std::abs(curr_theta) > std::abs(prev_theta);                  // Moving away from stable equilibrium/origin
     return sign_flip && moving_out;
 }
 
@@ -127,15 +127,20 @@ void backward_rk4_kernel(BackwardSweepParams p, DeviceArrays out) {
     out.end_hamiltonians[traj_idx] = evaluate_hamiltonian(current_state, p.alpha);
 }
 
-DeviceArrays allocate_device_arrays(int num_trajectories, long num_timesteps) {
+DeviceArrays allocate_device_arrays(int num_trajectories, std::vector<StateVec> h_seed_ring) {
     DeviceArrays d;
 
     // Use std::size_t for memory sizes!
     std::size_t float_array_size = (std::size_t)num_trajectories * sizeof(double);
+    std::size_t trajectory_pt_array_size = (std::size_t)num_trajectories * sizeof(TrajectoryPoint);
+    std::size_t seed_ring_array_size = (std::size_t)h_seed_ring.size() * sizeof(StateVec);
 
     gpuErrchk(cudaMalloc(&d.start_hamiltonians, float_array_size));
     gpuErrchk(cudaMalloc(&d.end_hamiltonians, float_array_size));
-    gpuErrchk(cudaMalloc(&d.hit_points, float_array_size)); // Fixed typo
+    gpuErrchk(cudaMalloc(&d.hit_points, trajectory_pt_array_size));
+    
+    gpuErrchk(cudaMalloc(&d.seed_ring, seed_ring_array_size));
+    gpuErrchk(cudaMemcpy(d.seed_ring, h_seed_ring.data(), seed_ring_array_size, cudaMemcpyHostToDevice));
 
     return d;
 }
@@ -143,17 +148,17 @@ DeviceArrays allocate_device_arrays(int num_trajectories, long num_timesteps) {
 HostArrays copy_device_arrays_to_host(const DeviceArrays& d, int num_trajectories, long num_timesteps) {
     HostArrays h;
 
-    std::size_t num_debug_float_entries = (std::size_t)num_trajectories;
-    std::size_t float_array_size = num_debug_float_entries * sizeof(double);
+    std::size_t float_array_size = (std::size_t)num_trajectories * sizeof(double);
+    std::size_t trajectory_pt_array_size = (std::size_t)num_trajectories * sizeof(TrajectoryPoint);
     
     // std::vector handles the CPU side allocation
-    h.start_hamiltonians.resize(num_debug_float_entries);
-    h.end_hamiltonians.resize(num_debug_float_entries);
-    h.hit_points.resize(num_trajectory_struct_entries);
+    h.start_hamiltonians.resize(num_trajectories);
+    h.end_hamiltonians.resize(num_trajectories);
+    h.hit_points.resize(num_trajectories);
 
     gpuErrchk(cudaMemcpy(h.start_hamiltonians.data(), d.start_hamiltonians, float_array_size, cudaMemcpyDeviceToHost));
     gpuErrchk(cudaMemcpy(h.end_hamiltonians.data(), d.end_hamiltonians, float_array_size, cudaMemcpyDeviceToHost));
-    gpuErrchk(cudaMemcpy(h.hit_points.data(), d.hit_points, trajectory_struct_array_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h.hit_points.data(), d.hit_points, trajectory_pt_array_size, cudaMemcpyDeviceToHost));
     
     return h;
 }
@@ -163,16 +168,16 @@ void free_device_arrays(DeviceArrays& d) {
     gpuErrchk(cudaFree(d.start_hamiltonians));
     gpuErrchk(cudaFree(d.end_hamiltonians));
     gpuErrchk(cudaFree(d.hit_points));
+    gpuErrchk(cudaFree(d.seed_ring));
     
     // Nullify pointers to prevent accidental reuse
     d.start_hamiltonians = nullptr;
     d.end_hamiltonians = nullptr;
     d.hit_points = nullptr;
+    d.seed_ring = nullptr;
 }
 
-void compute_stable_eigenspace(const double alpha, StateVec& v1, StateVec& v2) {
-    double theta_wrapped = std::atan2(std::sin(theta), std::cos(theta));  // Wraps to (-pi, pi]
-    
+void compute_stable_eigenspace(const double alpha, StateVec& v1, StateVec& v2) {    
     // Build linearization matrix about origin
     Eigen::Matrix4d A;
     A << 0.0,  1.0,    0.0, 0.0,
@@ -206,21 +211,89 @@ void compute_stable_eigenspace(const double alpha, StateVec& v1, StateVec& v2) {
     }
 }
 
-std::vector<StateVec> generate_seed_ring(int num_trajectories, double eps, StateVec& v1, StateVec& v2) {
-    std::vector<StateVec> seed_ring(num_trajectories);
+std::vector<StateVec> generate_seed_ring(int num_trajectories, double r, double alpha) {
+    // Get span of stable eigenspace
+    StateVec v1, v2;
+    compute_stable_eigenspace(alpha, v1, v2);
 
-    // TODO: IMPLEMENT RING ON PLANE SPANNED BY STABLE EIGENVECTORS WITH RADIUS EPSILON.
+    // Create seed ring from this eigenspace
+    std::vector<StateVec> seed_ring(num_trajectories);
+    for (int i = 0; i < num_trajectories; ++i) {
+        double angle = (2.0 * M_PI * i) / num_trajectories;
+        seed_ring[i] = (v1 * std::cos(angle) + v2 * std::sin(angle)) * r;
+    }
+    return seed_ring;
+}
+
+TrajectoryPoint find_closest_point(const std::vector<TrajectoryPoint>& hit_points, double phi_target) {
+    int best_idx = 0;
+    double min_error = 1e18;
+    for (int i = 0; i < hit_points.size(); ++i) {
+        if (hit_points[i].time < 0) {
+            double error = std::abs(hit_points[i].state.phi - phi_target);
+            if (error < min_error) {
+                min_error = error;
+                best_idx = i;
+            }
+        }
+    }
+    return hit_points[i];
 }
 
 
-TrajectoryPoint backwards_pass() {
-    // Run backward pass on the data
-    // TODO: IMPLEMENT BACKWARDS PASS BY SETTING UP FOR AND CALLING backward_rk4_kernel<>() AND POSTPROCESSING
+TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
+    const double DT = -0.005;            // Timestep size (negative since running in backwards time)
+    const double T_MAX = -5.0;           // Max NEGATIVE time to run to
+    const int NUM_TRAJECTORIES = 1000;   // Number of trajectories to shoot off
+    const double INITIAL_RADIUS = 1e-4;  // Radius of initial states about origin
+    
+    // Set up parameters for backwards sweep
+    BackwardSweepParams p;
+    p.alpha = alpha;
+    p.target_theta = theta;
+    p.target_phi = phi;
+    p.dt = DT;
+    p.num_timesteps = (int)(T_MAX/DT) + 1;
+    p.num_trajectories = NUM_TRAJECTORIES;
+
+    // Generate backwards sweep seed ring on CPU, and initialize it (along with storage for outputs) on GPU
+    std::vector<StateVec> h_seed_ring = generate_seed_ring(p.num_trajectories, INITIAL_RADIUS, p.alpha);
+    DeviceArrays d = allocate_device_arrays(p.num_trajectories, h_seed_ring);
+    p.seed_ring = d.seed_ring;      // CRITICAL: Link location of seed ring memory on GPU device as parameter
+
+    // 1. Configure and Launch Kernel
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (p.num_trajectories + threadsPerBlock - 1) / threadsPerBlock;
+    backward_rk4_kernel<<<blocksPerGrid, threadsPerBlock>>>(p, d);
+
+    // 2. Sync and Check for Errors
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+
+    // 3. Download results to Host and free device memory
+    HostArrays h = copy_device_arrays_to_host(d, p.num_trajectories, p.num_timesteps);
+    free_device_arrays(d);
+
+    // 4. Select the "Best" trajectory (closest match to target_phi)
+    TrajectoryPoint closest_point = find_closest_point(h.hit_points, p.target_phi);
+    return closest_point;
 }
 
 
 
 Result solve(double theta, double phi, double alpha) {
     Result res;
+    
+    TrajectoryPoint backwards_result = backwards_pass(theta, phi, alpha);
+    std::printf("-------- BEST RESULT -------\n");
+    std::printf("* theta_0 = %f\n", backwards_result.state.theta);
+    std::printf("* phi_0 = %f\n", backwards_result.state.phi);
+    std::printf("* (lambda_1)_0 = %f\n", backwards_result.state.lambda_1);
+    std::printf("* (lambda_2)_0 = %f\n", backwards_result.state.lambda_2);
+    std::printf("* cost = %f\n\n", backwards_result.state.cost);
+
+    res.l1 = backwards_result.state.lambda_1;
+    res.l2 = backwards_result.state.lambda_2;
+    res.cost = -backwards_result.state.cost;
     return res;
 }
