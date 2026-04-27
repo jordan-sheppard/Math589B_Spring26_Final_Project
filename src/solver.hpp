@@ -116,6 +116,9 @@ struct BackwardSweepParams {
     double dt;                     // Timestep size (will be NEGATIVE)
     long num_timesteps;            // Number of timesteps
     int num_trajectories;          // How many points are in our seed ring
+    double target_theta;           // The target initial angle
+    double target_phi;             // The target initial angular velocity
+    const StateVec* seed_ring;     // The actual seed states.
 };
 
 struct ForwardSweepParams {
@@ -139,13 +142,13 @@ struct ForwardSweepParams {
 struct DeviceArrays {
     double* start_hamiltonians;
     double* end_hamiltonians;
-    TrajectoryPoint* data;
+    TrajectoryPoint* hit_points;
 };
 
 struct HostArrays {
     std::vector<double> start_hamiltonians;
     std::vector<double> end_hamiltonians;
-    std::vector<TrajectoryPoint> data;
+    std::vector<TrajectoryPoint> hit_points;
 };
 
 struct Result {
