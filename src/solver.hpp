@@ -139,18 +139,30 @@ struct ForwardSweepParams {
     int grid_size;                 // E.g., 128 (for a 128x128 high-res zoom)
 };
 
-struct DeviceArrays {
+struct BackwardsTimeDeviceArrays {
     double* start_hamiltonians;
     double* end_hamiltonians;
     TrajectoryPoint* hit_points;
     StateVec* seed_ring;
 };
 
-struct HostArrays {
+struct BackwardsTimeHostArrays {
     std::vector<double> start_hamiltonians;
     std::vector<double> end_hamiltonians;
     std::vector<TrajectoryPoint> hit_points;
 };
+
+struct ForwardsTimeDeviceArrays {
+    double* start_hamiltonians;
+    double* end_hamiltonians;
+    TrajectoryPoint* final_states;
+};
+
+struct ForwardsTimeHostArrays{
+     std::vector<double> start_hamiltonians;
+    std::vector<double> end_hamiltonians;
+    std::vector<TrajectoryPoint> final_states;
+}
 
 struct Result {
     double l1;

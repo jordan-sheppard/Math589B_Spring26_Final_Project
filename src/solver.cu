@@ -85,7 +85,7 @@ double get_crossing_interpolation_factor(double target, double prev, double curr
 }
 
 __global__
-void backward_rk4_kernel(BackwardSweepParams p, DeviceArrays out) {
+void backward_rk4_kernel(BackwardSweepParams p, BackwardsTimeDeviceArrays out) {
     // Check CUDA thread is in bounds
     int traj_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (traj_idx >= p.num_trajectories) return;
@@ -127,8 +127,37 @@ void backward_rk4_kernel(BackwardSweepParams p, DeviceArrays out) {
     out.end_hamiltonians[traj_idx] = evaluate_hamiltonian(current_state, p.alpha);
 }
 
-DeviceArrays allocate_device_arrays(int num_trajectories, std::vector<StateVec> h_seed_ring) {
-    DeviceArrays d;
+__global__
+void forward_rk4_kernel(ForwardSweepParams p, ForwardsTimeDeviceArrays out) {
+    int idx_x = blockIdx.x * blockDim.x + threadIdx.x;
+    int idx_y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (idx_x >= p.grid_size || idx_y >= p.grid_size) return;
+
+    int tid = idx_y * p.grid_size + idx_x;
+
+    // Get (lambda_1, lambda_2) initial guess gridpoint for this threead
+    double l1 = p.l1_guess - p.search_radius + (2.0 * p.search_radius * idx_x) / (p.grid_size - 1);
+    double l2 = p.l2_guess - p.search_radius + (2.0 * p.search_radius * idx_y) / (p.grid_size - 1);
+
+    // Set up initial state of system before integrating forward in time
+    StateVec current_state;
+    current_state.theta = p.target_theta;
+    current_state.phi = p.target_phi;
+    current_state.lambda_1 = l1;
+    current_state.lambda_2 = l2;
+    current_state.cost = 0.0;
+
+    // Run forward in time
+    for (long step = 0; step < p.num_timesteps; ++step) {
+        current_state = rk4_step(current_state, p.dt, p.alpha);
+    }
+
+    // Store final state (to see how close we got to the origin)
+    out.hit_points[tid].state = current_state;
+}
+
+BackwardsTimeDeviceArrays allocate_device_arrays_backwards_time(int num_trajectories, std::vector<StateVec> h_seed_ring) {
+    BackwardsTimeDeviceArrays d;
 
     // Use std::size_t for memory sizes!
     std::size_t float_array_size = (std::size_t)num_trajectories * sizeof(double);
@@ -145,8 +174,22 @@ DeviceArrays allocate_device_arrays(int num_trajectories, std::vector<StateVec> 
     return d;
 }
 
-HostArrays copy_device_arrays_to_host(const DeviceArrays& d, int num_trajectories, long num_timesteps) {
-    HostArrays h;
+ForwardsTimeDeviceArrays allocate_device_arrays_forwards_time(int num_trajectories) {
+    ForwardsTimeDeviceArrays d;
+
+    // Use std::size_t for memory sizes!
+    std::size_t float_array_size = (std::size_t)num_trajectories * sizeof(double);
+    std::size_t trajectory_pt_array_size = (std::size_t)num_trajectories * sizeof(TrajectoryPoint);
+
+    gpuErrchk(cudaMalloc(&d.start_hamiltonians, float_array_size));
+    gpuErrchk(cudaMalloc(&d.end_hamiltonians, float_array_size));
+    gpuErrchk(cudaMalloc(&d.final_states, trajectory_pt_array_size));
+
+    return d;
+}
+
+BackwardsTimeHostArrays copy_device_arrays_to_host_backwards_time(const BackwardsTimeDeviceArrays& d, int num_trajectories, long num_timesteps) {
+    BackwardsTimeHostArrays h;
 
     std::size_t float_array_size = (std::size_t)num_trajectories * sizeof(double);
     std::size_t trajectory_pt_array_size = (std::size_t)num_trajectories * sizeof(TrajectoryPoint);
@@ -163,7 +206,25 @@ HostArrays copy_device_arrays_to_host(const DeviceArrays& d, int num_trajectorie
     return h;
 }
 
-void free_device_arrays(DeviceArrays& d) {
+ForwardsTimeHostArrays copy_device_arrays_to_host_forwards_time(const ForwardsTimeDeviceArrays& d, int num_trajectories) {
+    ForwardsTimeHostArrays h;
+
+    std::size_t float_array_size = (std::size_t)num_trajectories * sizeof(double);
+    std::size_t trajectory_pt_array_size = (std::size_t)num_trajectories * sizeof(TrajectoryPoint);
+
+    // std::vector handles the CPU side allocation
+    h.start_hamiltonians.resize(num_trajectories);
+    h.end_hamiltonians.resize(num_trajectories);
+    h.final_states.resize(num_trajectories);
+
+    gpuErrchk(cudaMemcpy(h.start_hamiltonians.data(), d.start_hamiltonians, float_array_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h.end_hamiltonians.data(), d.end_hamiltonians, float_array_size, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(h.final_states.data(), d.final_states, trajectory_pt_array_size, cudaMemcpyDeviceToHost));
+
+    return h;
+}
+
+void free_device_arrays_backwards_time(BackwardsTimeDeviceArrays& d) {
     // Free CUDA memory
     gpuErrchk(cudaFree(d.start_hamiltonians));
     gpuErrchk(cudaFree(d.end_hamiltonians));
@@ -175,6 +236,18 @@ void free_device_arrays(DeviceArrays& d) {
     d.end_hamiltonians = nullptr;
     d.hit_points = nullptr;
     d.seed_ring = nullptr;
+}
+
+void free_device_arrays_forwards_time(ForwardsTimeDeviceArrays& d) {
+    // Free CUDA memory
+    gpuErrchk(cudaFree(d.start_hamiltonians));
+    gpuErrchk(cudaFree(d.end_hamiltonians));
+    gpuErrchk(cudaFree(d.final_states));
+    
+    // Nullify pointers to prevent accidental reuse
+    d.start_hamiltonians = nullptr;
+    d.end_hamiltonians = nullptr;
+    d.final_states = nullptr;
 }
 
 void compute_stable_eigenspace(const double alpha, StateVec& v1, StateVec& v2) {    
@@ -253,12 +326,12 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     p.target_theta = theta;
     p.target_phi = phi;
     p.dt = DT;
-    p.num_timesteps = (int)(T_MAX/DT) + 1;
+    p.num_timesteps = (long)(T_MAX/DT) + 1;
     p.num_trajectories = NUM_TRAJECTORIES;
 
     // Generate backwards sweep seed ring on CPU, and initialize it (along with storage for outputs) on GPU
     std::vector<StateVec> h_seed_ring = generate_seed_ring(p.num_trajectories, INITIAL_RADIUS, p.alpha);
-    DeviceArrays d = allocate_device_arrays(p.num_trajectories, h_seed_ring);
+    BackwardsTimeDeviceArrays d = allocate_device_arrays_backwards_time(p.num_trajectories, h_seed_ring);
     p.seed_ring = d.seed_ring;      // CRITICAL: Link location of seed ring memory on GPU device as parameter
 
     // 1. Configure and Launch Kernel
@@ -271,29 +344,117 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     gpuErrchk(cudaDeviceSynchronize());
 
     // 3. Download results to Host and free device memory
-    HostArrays h = copy_device_arrays_to_host(d, p.num_trajectories, p.num_timesteps);
-    free_device_arrays(d);
+    BackwardsTimeHostArrays h = copy_device_arrays_to_host_backwards_time(d, p.num_trajectories, p.num_timesteps);
+    free_device_arrays_backwards_time(d);
 
     // 4. Select the "Best" trajectory (closest match to target_phi)
     TrajectoryPoint closest_point = find_closest_point(h.hit_points, p.target_phi);
     return closest_point;
 }
 
+TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_theta, double target_phi, double alpha) {
+    const double T_MAX = -backwards_seed.time + 0.25;      // Safety margin in case nearby trajectories need longer to reach origin
+    const double DT = 0.005;
+    long num_timesteps = (long)(T_MAX/DT) + 1;
 
+    const double GRID_SIZE = 255;                          // Number of cells to search
+    const int NUM_MICROSCOPING_ITERATIONS = 6;             // Number of times to zoom in
+    const double SHRINK_FACTOR = 0.5;                      // Halve the size of the box we search each time
+    
+    double phi_err = std::abs(backwards_seed.state.phi - target_phi);
+    const double SEARCH_RADIUS = 0.05;                     // TODO: DO I MAKE THIS DEPEND ON THE ERROR IN PHI?
+    
+    // Configure microscoping parameters 
+    ForwardSweepParams p;
+    p.alpha = alpha;
+    p.target_theta = target_theta;
+    p.target_phi = target_phi;
+    p.l1_guess = backwards_seed.state.lambda_1;
+    p.l2_guess = backwards_seed.state.lambda_2;
+    p.dt = DT;
+    p.search_radius = SEARCH_RADIUS;
+    p.grid_size = GRID_SIZE;
+
+    // Allocate memory on GPU
+    ForwardsTimeDeviceArrays d = allocate_device_arrays_forwards_time(p.grid_size * p.grid_size);
+    ForwardsTimeHostArrays h;
+    TrajectoryPoint best_point;
+    for (int i = 1; i <= NUM_MICROSCOPING_ITERATIONS; ++i) {
+        // 1. Run forward pass 
+        dim3 threadsPerBlock(16, 16); // 256 threads total
+        dim3 blocksPerGrid((p.grid_size + 15) / 16, (p.grid_size + 15) / 16);
+        forward_rk4_kernel<<<blocksPerGrid, threadsPerBlock>>>(p, d);
+
+        // 2. Sync and Check for Errors
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+
+        // 3. Download results to Host
+        h = copy_device_arrays_to_host_forwards_time(d, p.grid_size * p.grid_size);
+
+        // 4. Find "best point" (closest to origin)
+        double min_dist = 1e18;
+        int best_tid = 0;
+
+        for (int j = 0; j < (p.grid_size * p.grid_size); ++j) {
+            // Calculate L2 distance to origin in state space
+            double dist = l2_norm(h.final_states[j].state.theta, h.final_states[j].state.phi);
+            if (dist < min_dist) {
+                min_dist = dist;
+                best_tid = j;
+            }
+        }
+
+        // 5. Recover the initial costates (L1, L2) that produced this winner
+        int best_idx_x = best_tid % p.grid_size;
+        int best_idx_y = best_tid / p.grid_size;
+        double winner_l1 = p.l1_guess - p.search_radius + (2.0 * p.search_radius * best_idx_x) / (p.grid_size - 1);
+        double winner_l2 = p.l2_guess - p.search_radius + (2.0 * p.search_radius * best_idx_y) / (p.grid_size - 1);
+
+        // Store the full point to return later
+        best_point.state = h.final_states[best_tid].state;
+        best_point.state.lambda_1 = winner_l1; // Use the initial lambda, not the final one!
+        best_point.state.lambda_2 = winner_l2;
+        best_point.time = T_MAX;
+
+        // Update for next iteration
+        p.search_radius *= SHRINK_FACTOR;
+        p.l1_guess = winner_l1;
+        p.l2_guess = winner_l2;
+    }
+
+    // Free CUDA memory
+    free_device_arrays_forwards_time(d);
+
+    return best_point;
+}
 
 Result solve(double theta, double phi, double alpha) {
     Result res;
     
+    // Run backward pass
     TrajectoryPoint backwards_result = backwards_pass(theta, phi, alpha);
-    std::printf("-------- BEST RESULT -------\n");
+    std::printf("-------- BACKWARDS PASS RESULT -------\n");
     std::printf("* theta_0 = %f\n", backwards_result.state.theta);
     std::printf("* phi_0 = %f\n", backwards_result.state.phi);
     std::printf("* (lambda_1)_0 = %f\n", backwards_result.state.lambda_1);
     std::printf("* (lambda_2)_0 = %f\n", backwards_result.state.lambda_2);
-    std::printf("* cost = %f\n\n", backwards_result.state.cost);
+    std::printf("* cost = %f\n\n", -backwards_result.state.cost);
+    std::printf("* time = %f\n\n", -backwards_result.time);
 
-    res.l1 = backwards_result.state.lambda_1;
-    res.l2 = backwards_result.state.lambda_2;
-    res.cost = -backwards_result.state.cost;
+    // Run forward pass
+    TrajectoryPoint forwards_result = forwards_pass(backwards_result, theta, phi, alpha);
+
+    std::printf("-------- FORWARDS PASS RESULT -------\n");
+    std::printf("* theta_0 = %f\n", forwards_result.state.theta);
+    std::printf("* phi_0 = %f\n", forwards_result.state.phi);
+    std::printf("* (lambda_1)_0 = %f\n", forwards_result.state.lambda_1);
+    std::printf("* (lambda_2)_0 = %f\n", forwards_result.state.lambda_2);
+    std::printf("* cost = %f\n\n", forwards_result.state.cost);
+
+    // Parse result
+    res.l1 = forwards_result.state.lambda_1;
+    res.l2 = forwards_result.state.lambda_2;
+    res.cost = forwards_result.state.cost;
     return res;
 }
