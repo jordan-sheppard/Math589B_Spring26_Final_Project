@@ -305,14 +305,16 @@ std::vector<StateVec> generate_seed_ring(int num_trajectories, double r, double 
     return seed_ring;
 }
 
-TrajectoryPoint find_closest_point(const std::vector<TrajectoryPoint>& hit_points, double phi_target, int& best_idx) {
+TrajectoryPoint find_closest_point(const std::vector<TrajectoryPoint>& hit_points, double phi_target, int& best_idx, double& best_err) {
     best_idx = 0;
+    best_err = 1e18;
     double min_error = 1e18;
     for (int i = 0; i < hit_points.size(); ++i) {
         if (hit_points[i].time < 0) {
             double error = std::abs(hit_points[i].state.phi - phi_target);
             if (error < min_error) {
                 min_error = error;
+                best_err = error;
                 best_idx = i;
             }
         }
@@ -336,8 +338,11 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     const double DT = -0.005;             // Timestep size (negative since running in backwards time)
     const double T_MAX = -40.0;           // Max NEGATIVE time to run to
     const int NUM_TRAJECTORIES = 1000;    // Number of trajectories to shoot off at each iteration
-    const double INITIAL_RADIUS = 1e-5;   // Radius of initial states about origin
-    
+    const double INITIAL_RADIUS = 1e-6;   // Radius of initial states about origin
+    const int MAXITER = 30;               // Maximum number of iterations
+    const double SHRINK_FACTOR = 0.2;     // Shrink the 1D search space by 80% each iteration
+    const double ERR_TOLERANCE = 1e-6;    // 
+
     // Set up parameters for backwards sweep
     BackwardSweepParams p;
     p.alpha = alpha;
@@ -350,12 +355,12 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     // Zoom parameters
     double current_center_angle = M_PI; // Start looking straight across the circle
     double current_angle_spread = 2.0 * M_PI; // Start by searching the WHOLE circle
-    const int NUM_ZOOM_ITERS = 5;
-    const double SHRINK_FACTOR = 0.1; // Shrink the 1D search space by 90% each iteration
+    
 
     TrajectoryPoint best_point;
     int best_idx;
-    for (int iter = 0; iter < NUM_ZOOM_ITERS; ++iter) {
+    double best_err;
+    for (int iter = 0; iter < MAXITER; ++iter) {
         // 1. Generate the seed ring for the current zoom level
         std::vector<StateVec> h_seed_ring = generate_seed_ring(p.num_trajectories, INITIAL_RADIUS, p.alpha, current_center_angle, current_angle_spread);
 
@@ -373,13 +378,18 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
         free_device_arrays_backwards_time(d);
 
         // 4. Find closest point to target phi when it crosses
-        best_point = find_closest_point(h.hit_points, p.target_phi, best_idx);
+        best_point = find_closest_point(h.hit_points, p.target_phi, best_idx, best_err);
 
         // 5. Update zoom parameters to "shrink in" on the angle giving the optimal trajectory at the next iteration
         current_center_angle = current_center_angle - (current_angle_spread / 2.0) + (current_angle_spread * best_idx) / (double)(p.num_trajectories - 1);
         current_angle_spread *= SHRINK_FACTOR;
 
         print_backwards_pass_iteration(best_point, current_center_angle, current_angle_spread, iter + 1);
+
+        // 6. Check we have converged to within a given tolerance of the initial phi
+        if (best_err < ERR_TOLERANCE) {
+            break;
+        } 
     }
     return best_point;
 }
