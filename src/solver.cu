@@ -148,7 +148,7 @@ void forward_rk4_kernel(ForwardSweepParams p, ForwardsTimeDeviceArrays out) {
     current_state.cost = 0.0;
 
     // DEBUG: Capture initial hamiltonian
-    out.start_hamiltonians[traj_idx] = evaluate_hamiltonian(current_state, p.alpha);
+    out.start_hamiltonians[tid] = evaluate_hamiltonian(current_state, p.alpha);
 
     // Run forward in time
     for (long step = 0; step < p.num_timesteps; ++step) {
@@ -156,7 +156,7 @@ void forward_rk4_kernel(ForwardSweepParams p, ForwardsTimeDeviceArrays out) {
     }
 
     // DEBUG: Capture final Hamiltonian after integration loop to track drift
-    out.end_hamiltonians[traj_idx] = evaluate_hamiltonian(current_state, p.alpha);
+    out.end_hamiltonians[tid] = evaluate_hamiltonian(current_state, p.alpha);
 
     // Store final state (to see how close we got to the origin)
     out.final_states[tid].state = current_state;
