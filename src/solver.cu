@@ -374,6 +374,7 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
     p.dt = DT;
     p.search_radius = SEARCH_RADIUS;
     p.grid_size = GRID_SIZE;
+    p.num_timesteps = num_timesteps;
 
     // Allocate memory on GPU
     ForwardsTimeDeviceArrays d = allocate_device_arrays_forwards_time(p.grid_size * p.grid_size);
