@@ -462,11 +462,11 @@ Result solve(double theta, double phi, double alpha) {
     Result res;
     
     // Run backward pass
-    std::printf("=================  BACKWARDS PASS  =================\n")
+    std::printf("=================  BACKWARDS PASS  =================\n");
     TrajectoryPoint backwards_result = backwards_pass(theta, phi, alpha);
 
     // Run forward pass
-    std::printf("\n=================  FORWARDS PASS  =================\n")
+    std::printf("\n=================  FORWARDS PASS  =================\n");
     TrajectoryPoint forwards_result = forwards_pass(backwards_result, theta, phi, alpha);
 
     std::printf("\n-------- FINAL RESULT -------\n");
