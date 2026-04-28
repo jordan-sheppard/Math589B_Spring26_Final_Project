@@ -147,10 +147,16 @@ void forward_rk4_kernel(ForwardSweepParams p, ForwardsTimeDeviceArrays out) {
     current_state.lambda_2 = l2;
     current_state.cost = 0.0;
 
+    // DEBUG: Capture initial hamiltonian
+    out.start_hamiltonians[traj_idx] = evaluate_hamiltonian(current_state, p.alpha);
+
     // Run forward in time
     for (long step = 0; step < p.num_timesteps; ++step) {
         current_state = rk4_step(current_state, p.dt, p.alpha);
     }
+
+    // DEBUG: Capture final Hamiltonian after integration loop to track drift
+    out.end_hamiltonians[traj_idx] = evaluate_hamiltonian(current_state, p.alpha);
 
     // Store final state (to see how close we got to the origin)
     out.final_states[tid].state = current_state;
@@ -420,14 +426,24 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
         h = copy_device_arrays_to_host_forwards_time(d, p.grid_size * p.grid_size);
 
         // 4. Find "best point" (closest to origin)
-        double min_dist = 1e18;
+        double min_score = 1e18; // Renamed from min_dist
         int best_tid = 0;
 
         for (int j = 0; j < (p.grid_size * p.grid_size); ++j) {
+            StateVec final_s = h.final_states[j].state;
+            
             // Calculate L2 distance to origin in state space
-            double dist = l2_norm(h.final_states[j].state.theta, h.final_states[j].state.phi);
-            if (dist < min_dist) {
-                min_dist = dist;
+            double dist = l2_norm(final_s.theta, final_s.phi);
+            
+            // Calculate how badly this trajectory violates the H=0 manifold rule
+            // (We evaluate at final_s, but H is constant along the true path)
+            double H_penalty = std::abs(h.start_hamiltonians[j]);
+            
+            // Soft constraint: The trajectory must reach the origin AND maintain H=0
+            double score = dist + 1e5 * H_penalty; 
+
+            if (score < min_score) {
+                min_score = score;
                 best_tid = j;
             }
         }
