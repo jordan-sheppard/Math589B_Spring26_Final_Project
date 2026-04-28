@@ -385,12 +385,12 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
 }
 
 TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_theta, double target_phi, double alpha) {
-    const double T_MAX = -backwards_seed.time;      // Safety margin in case nearby trajectories need longer to reach origin
+    const double T_MAX = -backwards_seed.time;             // Symmery of forwards & backwards trajectories
     const double DT = 0.005;
     long num_timesteps = (long)(T_MAX/DT) + 1;
 
     const double GRID_SIZE = 255;                          // Number of cells to search
-    const int NUM_MICROSCOPING_ITERATIONS = 6;             // Number of times to zoom in
+    const int NUM_MICROSCOPING_ITERATIONS = 10;            // Number of times to zoom in
     const double SHRINK_FACTOR = 0.5;                      // Halve the size of the box we search each time
     
     double phi_err = std::abs(backwards_seed.state.phi - target_phi);
@@ -426,7 +426,7 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
         h = copy_device_arrays_to_host_forwards_time(d, p.grid_size * p.grid_size);
 
         // 4. Find "best point" (closest to origin)
-        double min_score = 1e18; // Renamed from min_dist
+        double min_score = 1e40; // Renamed from min_dist
         int best_tid = 0;
 
         for (int j = 0; j < (p.grid_size * p.grid_size); ++j) {
@@ -460,7 +460,7 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
         best_point.state.lambda_2 = winner_l2;
         best_point.time = T_MAX;
         
-        std::printf("Iteration %d: l1 = %.10f ; l2 = %.10f\n", i, winner_l1, winner_l2);
+        std::printf("Iteration %d: l1 = %.10f ; l2 = %.10f; |H| = %.10f\n", i, winner_l1, winner_l2, std::abs(h.start_hamiltonians[best_tid]));
 
         // Update for next iteration
         p.search_radius *= SHRINK_FACTOR;
