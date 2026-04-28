@@ -341,7 +341,7 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     const double INITIAL_RADIUS = 1e-6;   // Radius of initial states about origin
     const int MAXITER = 30;               // Maximum number of iterations
     const double SHRINK_FACTOR = 0.1;     // Shrink the 1D search space by 80% each iteration
-    const double ERR_TOLERANCE = 1e-5;    // Error tolerance of distance away from phi
+    const double ERR_TOLERANCE = 1e-3;    // Error tolerance of distance away from phi
 
     // Set up parameters for backwards sweep
     BackwardSweepParams p;
@@ -400,11 +400,13 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
     long num_timesteps = (long)(T_MAX/DT) + 1;
 
     const double GRID_SIZE = 255;                          // Number of cells to search
-    const int NUM_MICROSCOPING_ITERATIONS = 20;            // Number of times to zoom in
+    const int NUM_MICROSCOPING_ITERATIONS = 30;            // Number of times to zoom in
     const double SHRINK_FACTOR = 0.5;                      // Halve the size of the box we search each time
     
+    // ADAPTIVE RADIUS: 
+    // Base of 0.02 for tiny angles, but balloons outward for large errors!
     double phi_err = std::abs(backwards_seed.state.phi - target_phi);
-    const double SEARCH_RADIUS = 0.001;                    // TODO: DO I MAKE THIS DEPEND ON THE ERROR IN PHI?
+    double SEARCH_RADIUS = std::max(0.02, phi_err * 100.0);
     
     // Configure microscoping parameters 
     ForwardSweepParams p;
