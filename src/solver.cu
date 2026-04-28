@@ -340,8 +340,8 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     const int NUM_TRAJECTORIES = 1000;    // Number of trajectories to shoot off at each iteration
     const double INITIAL_RADIUS = 1e-6;   // Radius of initial states about origin
     const int MAXITER = 30;               // Maximum number of iterations
-    const double SHRINK_FACTOR = 0.2;     // Shrink the 1D search space by 80% each iteration
-    const double ERR_TOLERANCE = 1e-6;    // 
+    const double SHRINK_FACTOR = 0.1;     // Shrink the 1D search space by 80% each iteration
+    const double ERR_TOLERANCE = 1e-5;    // Error tolerance of distance away from phi
 
     // Set up parameters for backwards sweep
     BackwardSweepParams p;
@@ -404,7 +404,7 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
     const double SHRINK_FACTOR = 0.5;                      // Halve the size of the box we search each time
     
     double phi_err = std::abs(backwards_seed.state.phi - target_phi);
-    const double SEARCH_RADIUS = 0.05;                     // TODO: DO I MAKE THIS DEPEND ON THE ERROR IN PHI?
+    const double SEARCH_RADIUS = 0.001;                    // TODO: DO I MAKE THIS DEPEND ON THE ERROR IN PHI?
     
     // Configure microscoping parameters 
     ForwardSweepParams p;
@@ -447,10 +447,10 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
             
             // Calculate how badly this trajectory violates the H=0 manifold rule
             // (We evaluate at final_s, but H is constant along the true path)
-            double H_penalty = std::abs(h.start_hamiltonians[j]);
+            double H_penalty = std::abs(h.end_hamiltonians[j]);
             
             // Soft constraint: The trajectory must reach the origin AND maintain H=0
-            double score = dist + 1e5 * H_penalty; 
+            double score = dist + H_penalty; 
 
             if (score < min_score) {
                 min_score = score;
