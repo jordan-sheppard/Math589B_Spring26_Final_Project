@@ -162,7 +162,7 @@ struct ForwardsTimeHostArrays{
      std::vector<double> start_hamiltonians;
     std::vector<double> end_hamiltonians;
     std::vector<TrajectoryPoint> final_states;
-}
+};
 
 struct Result {
     double l1;

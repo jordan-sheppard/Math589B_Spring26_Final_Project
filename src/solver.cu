@@ -153,7 +153,7 @@ void forward_rk4_kernel(ForwardSweepParams p, ForwardsTimeDeviceArrays out) {
     }
 
     // Store final state (to see how close we got to the origin)
-    out.hit_points[tid].state = current_state;
+    out.final_states[tid].state = current_state;
 }
 
 BackwardsTimeDeviceArrays allocate_device_arrays_backwards_time(int num_trajectories, std::vector<StateVec> h_seed_ring) {
@@ -317,7 +317,7 @@ TrajectoryPoint find_closest_point(const std::vector<TrajectoryPoint>& hit_point
 TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     const double DT = -0.005;            // Timestep size (negative since running in backwards time)
     const double T_MAX = -20.0;           // Max NEGATIVE time to run to
-    const int NUM_TRAJECTORIES = 1000000;   // Number of trajectories to shoot off
+    const int NUM_TRAJECTORIES = 100000;   // Number of trajectories to shoot off
     const double INITIAL_RADIUS = 1e-3;  // Radius of initial states about origin
     
     // Set up parameters for backwards sweep
@@ -416,6 +416,8 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
         best_point.state.lambda_1 = winner_l1; // Use the initial lambda, not the final one!
         best_point.state.lambda_2 = winner_l2;
         best_point.time = T_MAX;
+        
+        std::printf("Iteration %d: l1 = %f ; l2 = %f\n", i, winner_l1, winner_l2);
 
         // Update for next iteration
         p.search_radius *= SHRINK_FACTOR;
