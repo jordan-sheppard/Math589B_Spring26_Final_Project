@@ -284,7 +284,7 @@ void compute_stable_eigenspace(const double alpha, StateVec& v1, StateVec& v2) {
     }
 }
 
-std::vector<StateVec> generate_seed_ring(int num_trajectories, double r, double alpha) {
+std::vector<StateVec> generate_seed_ring(int num_trajectories, double r, double alpha, double center_angle, double angle_spread) {
     // Get span of stable eigenspace
     StateVec v1, v2;
     compute_stable_eigenspace(alpha, v1, v2);
@@ -292,14 +292,15 @@ std::vector<StateVec> generate_seed_ring(int num_trajectories, double r, double 
     // Create seed ring from this eigenspace
     std::vector<StateVec> seed_ring(num_trajectories);
     for (int i = 0; i < num_trajectories; ++i) {
-        double angle = (2.0 * M_PI * i) / num_trajectories;
+        // Map i to a specific angle within the spread
+        double angle = center_angle - (angle_spread / 2.0) + (angle_spread * i) / (double)(num_trajectories - 1);
         seed_ring[i] = (v1 * std::cos(angle) + v2 * std::sin(angle)) * r;
     }
     return seed_ring;
 }
 
-TrajectoryPoint find_closest_point(const std::vector<TrajectoryPoint>& hit_points, double phi_target) {
-    int best_idx = 0;
+TrajectoryPoint find_closest_point(const std::vector<TrajectoryPoint>& hit_points, double phi_target, int& best_idx) {
+    best_idx = 0;
     double min_error = 1e18;
     for (int i = 0; i < hit_points.size(); ++i) {
         if (hit_points[i].time < 0) {
@@ -313,12 +314,23 @@ TrajectoryPoint find_closest_point(const std::vector<TrajectoryPoint>& hit_point
     return hit_points[best_idx];
 }
 
+void print_backwards_pass_iteration(const TrajectoryPoint& backwards_result, double angle_center, double angle_spread, int iteration) {
+    std::printf("---- ITERATION %d ----\n", iteration);
+    std::printf("* theta_0 = %.10f\n", backwards_result.state.theta);
+    std::printf("* phi_0 = %.10f\n", backwards_result.state.phi);
+    std::printf("* (lambda_1)_0 = %.10f\n", backwards_result.state.lambda_1);
+    std::printf("* (lambda_2)_0 = %.10f\n", backwards_result.state.lambda_2);
+    std::printf("* cost = %.10f\n\n", -backwards_result.state.cost);
+    std::printf("* time of optimal trajectory = %.10f\n", -backwards_result.time);
+    std::printf("* new optimal angle = %.10f\n", angle_center);
+    std::printf("* new angle spread = %.10f\n", angle_spread);
+}
 
 TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
-    const double DT = -0.005;            // Timestep size (negative since running in backwards time)
-    const double T_MAX = -20.0;           // Max NEGATIVE time to run to
-    const int NUM_TRAJECTORIES = 100000;   // Number of trajectories to shoot off
-    const double INITIAL_RADIUS = 1e-3;  // Radius of initial states about origin
+    const double DT = -0.005;             // Timestep size (negative since running in backwards time)
+    const double T_MAX = -40.0;           // Max NEGATIVE time to run to
+    const int NUM_TRAJECTORIES = 1000;    // Number of trajectories to shoot off at each iteration
+    const double INITIAL_RADIUS = 1e-5;   // Radius of initial states about origin
     
     // Set up parameters for backwards sweep
     BackwardSweepParams p;
@@ -329,27 +341,41 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     p.num_timesteps = (long)(T_MAX/DT) + 1;
     p.num_trajectories = NUM_TRAJECTORIES;
 
-    // Generate backwards sweep seed ring on CPU, and initialize it (along with storage for outputs) on GPU
-    std::vector<StateVec> h_seed_ring = generate_seed_ring(p.num_trajectories, INITIAL_RADIUS, p.alpha);
-    BackwardsTimeDeviceArrays d = allocate_device_arrays_backwards_time(p.num_trajectories, h_seed_ring);
-    p.seed_ring = d.seed_ring;      // CRITICAL: Link location of seed ring memory on GPU device as parameter
+    // Zoom parameters
+    double current_center_angle = M_PI; // Start looking straight across the circle
+    double current_angle_spread = 2.0 * M_PI; // Start by searching the WHOLE circle
+    const int NUM_ZOOM_ITERS = 5;
+    const double SHRINK_FACTOR = 0.1; // Shrink the 1D search space by 90% each iteration
 
-    // 1. Configure and Launch Kernel
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (p.num_trajectories + threadsPerBlock - 1) / threadsPerBlock;
-    backward_rk4_kernel<<<blocksPerGrid, threadsPerBlock>>>(p, d);
+    TrajectoryPoint best_point;
+    int best_idx;
+    for (int iter = 0; iter < NUM_ZOOM_ITERS; ++iter) {
+        // 1. Generate the seed ring for the current zoom level
+        std::vector<StateVec> h_seed_ring = generate_seed_ring(p.num_trajectories, INITIAL_RADIUS, p.alpha, current_center_angle, current_angle_spread);
 
-    // 2. Sync and Check for Errors
-    gpuErrchk(cudaPeekAtLastError());
-    gpuErrchk(cudaDeviceSynchronize());
+        // 2. Allocate and run
+        BackwardsTimeDeviceArrays d = allocate_device_arrays_backwards_time(p.num_trajectories, h_seed_ring);
+        p.seed_ring = d.seed_ring;
 
-    // 3. Download results to Host and free device memory
-    BackwardsTimeHostArrays h = copy_device_arrays_to_host_backwards_time(d, p.num_trajectories, p.num_timesteps);
-    free_device_arrays_backwards_time(d);
+        int threadsPerBlock = 256;
+        int blocksPerGrid = (p.num_trajectories + threadsPerBlock - 1) / threadsPerBlock;
+        backward_rk4_kernel<<<blocksPerGrid, threadsPerBlock>>>(p, d);
+        gpuErrchk(cudaDeviceSynchronize());
 
-    // 4. Select the "Best" trajectory (closest match to target_phi)
-    TrajectoryPoint closest_point = find_closest_point(h.hit_points, p.target_phi);
-    return closest_point;
+        // 3. Download results to host
+        BackwardsTimeHostArrays h = copy_device_arrays_to_host_backwards_time(d, p.num_trajectories, p.num_timesteps);
+        free_device_arrays_backwards_time(d);
+
+        // 4. Find closest point to target phi when it crosses
+        TrajectoryPoint best_point = find_closest_point(h.hit_points, p.target_phi, best_idx);
+
+        // 5. Update zoom parameters to "shrink in" on the angle giving the optimal trajectory at the next iteration
+        current_center_angle = current_center_angle - (current_angle_spread / 2.0) + (current_angle_spread * best_idx) / (double)(p.num_trajectories - 1);
+        current_angle_spread *= SHRINK_FACTOR;
+
+        print_backwards_pass_iteration(best_point, current_center_angle, current_angle_spread, iter + 1);
+    }
+    return best_point;
 }
 
 TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_theta, double target_phi, double alpha) {
@@ -418,7 +444,7 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
         best_point.state.lambda_2 = winner_l2;
         best_point.time = T_MAX;
         
-        std::printf("Iteration %d: l1 = %f ; l2 = %f\n", i, winner_l1, winner_l2);
+        std::printf("Iteration %d: l1 = %.10f ; l2 = %.10f\n", i, winner_l1, winner_l2);
 
         // Update for next iteration
         p.search_radius *= SHRINK_FACTOR;
@@ -436,24 +462,19 @@ Result solve(double theta, double phi, double alpha) {
     Result res;
     
     // Run backward pass
+    std::printf("=================  BACKWARDS PASS  =================\n")
     TrajectoryPoint backwards_result = backwards_pass(theta, phi, alpha);
-    std::printf("-------- BACKWARDS PASS RESULT -------\n");
-    std::printf("* theta_0 = %f\n", backwards_result.state.theta);
-    std::printf("* phi_0 = %f\n", backwards_result.state.phi);
-    std::printf("* (lambda_1)_0 = %f\n", backwards_result.state.lambda_1);
-    std::printf("* (lambda_2)_0 = %f\n", backwards_result.state.lambda_2);
-    std::printf("* cost = %f\n\n", -backwards_result.state.cost);
-    std::printf("* time = %f\n\n", -backwards_result.time);
 
     // Run forward pass
+    std::printf("\n=================  FORWARDS PASS  =================\n")
     TrajectoryPoint forwards_result = forwards_pass(backwards_result, theta, phi, alpha);
 
-    std::printf("-------- FORWARDS PASS RESULT -------\n");
-    std::printf("* theta_0 = %f\n", forwards_result.state.theta);
-    std::printf("* phi_0 = %f\n", forwards_result.state.phi);
-    std::printf("* (lambda_1)_0 = %f\n", forwards_result.state.lambda_1);
-    std::printf("* (lambda_2)_0 = %f\n", forwards_result.state.lambda_2);
-    std::printf("* cost = %f\n\n", forwards_result.state.cost);
+    std::printf("\n-------- FINAL RESULT -------\n");
+    std::printf("* theta_0 = %.10f\n", forwards_result.state.theta);
+    std::printf("* phi_0 = %.10f\n", forwards_result.state.phi);
+    std::printf("* (lambda_1)_0 = %.10f\n", forwards_result.state.lambda_1);
+    std::printf("* (lambda_2)_0 = %.10f\n", forwards_result.state.lambda_2);
+    std::printf("* cost = %.10f\n\n", forwards_result.state.cost);
 
     // Parse result
     res.l1 = forwards_result.state.lambda_1;
