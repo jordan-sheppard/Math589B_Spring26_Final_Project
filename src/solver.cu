@@ -385,7 +385,7 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
 }
 
 TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_theta, double target_phi, double alpha) {
-    const double T_MAX = -backwards_seed.time + 0.25;      // Safety margin in case nearby trajectories need longer to reach origin
+    const double T_MAX = -backwards_seed.time;      // Safety margin in case nearby trajectories need longer to reach origin
     const double DT = 0.005;
     long num_timesteps = (long)(T_MAX/DT) + 1;
 
