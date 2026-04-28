@@ -147,19 +147,28 @@ void forward_rk4_kernel(ForwardSweepParams p, ForwardsTimeDeviceArrays out) {
     current_state.lambda_2 = l2;
     current_state.cost = 0.0;
 
-    // DEBUG: Capture initial hamiltonian
     out.start_hamiltonians[tid] = evaluate_hamiltonian(current_state, p.alpha);
+
+    // Track the closest approach to the origin
+    double min_dist = 1e18;
+    StateVec best_state = current_state;
 
     // Run forward in time
     for (long step = 0; step < p.num_timesteps; ++step) {
         current_state = rk4_step(current_state, p.dt, p.alpha);
+        
+        // Calculate distance to origin. If close to origin, choose this as final state for this trajectory.
+        double dist = l2_norm(current_state.theta, current_state.phi);
+        if (dist < min_dist) {
+            min_dist = dist;
+            best_state = current_state;
+        }
     }
 
-    // DEBUG: Capture final Hamiltonian after integration loop to track drift
-    out.end_hamiltonians[tid] = evaluate_hamiltonian(current_state, p.alpha);
+    out.end_hamiltonians[tid] = evaluate_hamiltonian(best_state, p.alpha);
 
-    // Store final state (to see how close we got to the origin)
-    out.final_states[tid].state = current_state;
+    // Store the state of CLOSEST approach, not the final timestep
+    out.final_states[tid].state = best_state;
 }
 
 BackwardsTimeDeviceArrays allocate_device_arrays_backwards_time(int num_trajectories, std::vector<StateVec> h_seed_ring) {
