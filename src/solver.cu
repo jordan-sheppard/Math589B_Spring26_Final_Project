@@ -337,7 +337,7 @@ void print_backwards_pass_iteration(const TrajectoryPoint& backwards_result, dou
 TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
     const double DT = -0.005;             // Timestep size (negative since running in backwards time)
     const double T_MAX = -40.0;           // Max NEGATIVE time to run to
-    const int NUM_TRAJECTORIES = 1000;    // Number of trajectories to shoot off at each iteration
+    const int NUM_TRAJECTORIES = 10000;   // Number of trajectories to shoot off at each iteration
     const double INITIAL_RADIUS = 1e-6;   // Radius of initial states about origin
     const int MAXITER = 30;               // Maximum number of iterations
     const double SHRINK_FACTOR = 0.1;     // Shrink the 1D search space by 80% each iteration
@@ -400,7 +400,7 @@ TrajectoryPoint forwards_pass(TrajectoryPoint backwards_seed, double target_thet
     long num_timesteps = (long)(T_MAX/DT) + 1;
 
     const double GRID_SIZE = 255;                          // Number of cells to search
-    const int NUM_MICROSCOPING_ITERATIONS = 10;            // Number of times to zoom in
+    const int NUM_MICROSCOPING_ITERATIONS = 20;            // Number of times to zoom in
     const double SHRINK_FACTOR = 0.5;                      // Halve the size of the box we search each time
     
     double phi_err = std::abs(backwards_seed.state.phi - target_phi);
