@@ -367,7 +367,7 @@ TrajectoryPoint backwards_pass(double theta, double phi, double alpha) {
         free_device_arrays_backwards_time(d);
 
         // 4. Find closest point to target phi when it crosses
-        TrajectoryPoint best_point = find_closest_point(h.hit_points, p.target_phi, best_idx);
+        best_point = find_closest_point(h.hit_points, p.target_phi, best_idx);
 
         // 5. Update zoom parameters to "shrink in" on the angle giving the optimal trajectory at the next iteration
         current_center_angle = current_center_angle - (current_angle_spread / 2.0) + (current_angle_spread * best_idx) / (double)(p.num_trajectories - 1);
