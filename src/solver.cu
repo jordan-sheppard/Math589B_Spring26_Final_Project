@@ -135,6 +135,8 @@ __host__ __device__ double compute_hamiltonian(
     return hamiltonian;
 }
 
+// ---- INTEGRATION KERNELS/FUNCTIONS ----
+
 // Takes a single microscopic RK4 step, updating both the 5D state and 4x4 sensitivity matrix
 __host__ __device__ VarState rk4_step(
     const VarState& current, 
@@ -160,7 +162,44 @@ __host__ __device__ VarState rk4_step(
     return next_state;
 }
 
+// Loops rk4_step over the micro-grid and packages the final state/matrix + initial Hamiltonian
+__host__ __device__ SegmentEvaluation simulate_segment(
+    const VarState& initial_guess,
+    const SystemParams& sys_params,
+    const IntegratorParams& int_params
+) {
+    VarState current_state = initial_guess;
 
-// INTEGRATION KERNELS/FUNCTIONS
+    // 1. Initialize running cost for this local segment to zero (at t=0)
+    current_state.cost() = 0.0;
+
+    // 2. Initialize sensitivity matrix (at t=0) to M = d(s(t))/d(s_initial) = d(s(0))/d(s(0)) = I
+    #pragma unroll
+    for (int r = 0; r < 4; r++) {
+        #pragma unroll
+        for (int c = 0; c < 4; c++) {
+            if (r == c) {
+                current.M(r, c) = 1.0;
+            } else {
+                current.M(r, c) = 0.0;
+            }
+        }
+    }
+
+    // 3. Compute the Hamiltonian constraint at the START of the segment
+    double init_H = compute_hamiltonian(current, sys_params);
+
+    // 4. Integrate forward in time using RK4
+    for (int step = 0; step < int_params.num_steps; step++) {
+        current = rk4_step(current, sys_params, int_params.dt);
+    }
+
+    // 5. Package and return results 
+    SegmentEvaluation result;
+    result.final_state = current;
+    result.initial_hamiltonian = init_H;
+
+    return result;
+}
 
 
