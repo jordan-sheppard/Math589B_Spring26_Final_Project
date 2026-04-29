@@ -12,7 +12,8 @@
 
 // ********* ODE PHYSICS SIMULATION FUNCTIONS *********
 
-__host__ __device__ void compute_state_physics(
+__host__ __device__
+void compute_state_physics(
     const VarState& state,
     const SystemParams& params,
     VarState& ds
@@ -44,7 +45,8 @@ __host__ __device__ void compute_state_physics(
 }
 
 
-__host__ __device__ Mat4x4 compute_sensitivity_jacobian(
+__host__ __device__
+Mat4x4 compute_sensitivity_jacobian(
     const VarState& state,
     const SystemParams& params
 ) {
@@ -94,7 +96,8 @@ __host__ __device__ Mat4x4 compute_sensitivity_jacobian(
     return A;
 }
 
-__host__ __device__ VarState get_derivatives(
+__host__ __device__
+VarState get_derivatives(
     const VarState& state,
     const SystemParams& params
 ) {
@@ -110,7 +113,8 @@ __host__ __device__ VarState get_derivatives(
     return ds;
 }
 
-__host__ __device__ double compute_hamiltonian(
+__host__ __device__
+double compute_hamiltonian(
     const VarState& state,
     const SystemParams& params
 ) {
@@ -138,7 +142,8 @@ __host__ __device__ double compute_hamiltonian(
 // ---- INTEGRATION KERNELS/FUNCTIONS ----
 
 // Takes a single microscopic RK4 step, updating both the 5D state and 4x4 sensitivity matrix
-__host__ __device__ VarState rk4_step(
+__host__ __device__
+VarState rk4_step(
     const VarState& current, 
     const SystemParams& params, 
     double dt
@@ -163,7 +168,8 @@ __host__ __device__ VarState rk4_step(
 }
 
 // Loops rk4_step over the micro-grid and packages the final state/matrix + initial Hamiltonian
-__host__ __device__ SegmentEvaluation simulate_segment(
+__host__ __device__
+SegmentEvaluation simulate_segment(
     const VarState& initial_guess,
     const SystemParams& sys_params,
     const IntegratorParams& int_params
@@ -201,5 +207,38 @@ __host__ __device__ SegmentEvaluation simulate_segment(
 
     return result;
 }
+
+// Each thread reads the guess for its corresponding node, integrates the segment, and writes to segment_results[k]
+__global__ 
+void multiple_shooting_kernel(
+    const double* d_node_guesses,         // Flat array of 4D guesses sitting in GPU memory
+    SegmentEvaluation* d_segment_results, // Output array sitting in GPU memory
+    SystemParams sys_params, 
+    IntegratorParams int_params
+) {
+    // 1. Calculate the global thread ID (which corresponds to segment 'k')
+    int k = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // 2. Safety check: Ensure we don't launch threads out of bounds
+    if (k >= sys_params.num_shooting_intervals) {
+        return;
+    }
+
+    // 3. Extract the initial guess for this specific node from the flat array
+    // Note: simulate_segment handles initializing cost to 0.0 and M to the Identity matrix
+    VarState initial_guess;
+    initial_guess.theta() = d_node_guesses[k * 4 + 0];
+    initial_guess.phi()   = d_node_guesses[k * 4 + 1];
+    initial_guess.l1()    = d_node_guesses[k * 4 + 2];
+    initial_guess.l2()    = d_node_guesses[k * 4 + 3];
+
+    // 4. Run the full RK4 integration and sensitivity propagation for this segment
+    SegmentEvaluation result = simulate_segment(initial_guess, sys_params, int_params);
+
+    // 5. Write the integrated state, matrices, and Hamiltonian back to global memory
+    d_segment_results[k] = result;
+}
+
+
 
 
