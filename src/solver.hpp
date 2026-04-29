@@ -200,26 +200,51 @@ struct OptimizationResult {
 };
 
 // ---- Physics/derivative computation functions ----
+
 // Computes the state derivatives/physics ds/dt (along with cost)
-__host__ __device__ void compute_state_physics(const VarState& state, const SystemParams& params, VarState& ds);
+__host__ __device__ void compute_state_physics(
+    const VarState& state,
+    const SystemParams& params,
+    VarState& ds
+);
 
 // Computes the Jacobian matrix A(s) for the sensitivities M, such that dM/dt = A(s) * M
-__host__ __device__ Mat4x4 compute_sensitivity_jacobian(const VarState& state, const SystemParams& params);
+__host__ __device__ Mat4x4 compute_sensitivity_jacobian(
+    const VarState& state,
+    const SystemParams& params
+);
 
 // Computes the derivatives for the entire system (states AND sensitivities)
-__host__ __device__ VarState get_derivatives(const VarState& state, const SystemParams& params);
+__host__ __device__ VarState get_derivatives(
+    const VarState& state,
+    const SystemParams& params
+);
+
 
 // ---- Integration functions ----
+
 // Evaluates the Hamiltonian energy constraint at a specific state
-__host__ __device__ double compute_hamiltonian(const VarState& state, const SystemParams& params);
+__host__ __device__ double compute_hamiltonian(
+    const VarState& state,
+    const SystemParams& params
+);
 
 // Takes a single microscopic RK4 step, updating both the 5D state and 4x4 sensitivity matrix
-__host__ __device__ VarState rk4_step(const VarState& current, const SystemParams& params, double dt_micro);
+__host__ __device__ VarState rk4_step(
+    const VarState& current,
+    const SystemParams& params,
+    double dt_micro
+);
 
 // Loops rk4_step over the micro-grid and packages the final state/matrix + initial Hamiltonian
-__host__ __device__ SegmentEvaluation simulate_segment(const VarState& initial_guess, const SystemParams& sys_params, const IntegratorParams& int_params);
+__host__ __device__ SegmentEvaluation simulate_segment(
+    const VarState& initial_guess,
+    const SystemParams& sys_params,
+    const IntegratorParams& int_params
+);
 
 // ---- GPU Kernel ----
+
 // Thread k reads the guess for node k, integrates the segment, and writes to segment_results[k]
 __global__ void multiple_shooting_kernel(
     const double* d_node_guesses,         // Flat array of 4D guesses sitting in GPU memory
@@ -265,6 +290,7 @@ OptimizationResult solve_multiple_shooting(
 );
 
 // ---- Continuation Loop ----
+
 // Generates the initial straight-line LQR guess for the very first easy problem
 std::vector<double> generate_lqr_seed(const SystemParams& sys_params);
 
@@ -277,4 +303,6 @@ OptimizationResult run_continuation_sweep(
     NewtonParams newton_params
 );
 
+// Main driver; gets optimal initial costates and costs for given initial
+// theta and phi, and friction parameter alpha
 Result solve(double theta, double phi, double alpha);
