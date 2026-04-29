@@ -135,6 +135,31 @@ __host__ __device__ double compute_hamiltonian(
     return hamiltonian;
 }
 
+// Takes a single microscopic RK4 step, updating both the 5D state and 4x4 sensitivity matrix
+__host__ __device__ VarState rk4_step(
+    const VarState& current, 
+    const SystemParams& params, 
+    double dt
+) {
+    double half_dt = 0.5 * dt;
+
+    // k1 = f(y_n)
+    VarState k1 = get_derivatives(current, params);
+
+    // k2 = f(y_n + dt/2 * k1)
+    VarState k2 = get_derivatives(current + (k1 * half_dt), params);
+
+    // k3 = f(y_n + dt/2 * k2)
+    VarState k3 = get_derivatives(current + (k2 * half_dt), params);
+
+    // k4 = f(y_n + dt * k3)
+    VarState k4 = get_derivatives(current + (k3 * dt), params);
+
+    // y_{n+1} = y_n + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
+    VarState next_state = current + (k1 + k2 * 2.0 + k3 * 2.0 + k4) * (dt / 6.0);
+    return next_state;
+}
+
 
 // INTEGRATION KERNELS/FUNCTIONS
 

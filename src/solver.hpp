@@ -233,7 +233,7 @@ __host__ __device__ double compute_hamiltonian(
 __host__ __device__ VarState rk4_step(
     const VarState& current,
     const SystemParams& params,
-    double dt_micro
+    double dt
 );
 
 // Loops rk4_step over the micro-grid and packages the final state/matrix + initial Hamiltonian
