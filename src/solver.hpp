@@ -144,11 +144,56 @@ inline VarState operator*(double scalar, const VarState& vec) {
     return vec * scalar;
 }
 
-
-struct Result {
-    double l1;
-    double l2;
-    double cost;
+// 1. Physics & Constraints
+struct SystemParams {
+    double alpha;
+    double theta_init;
+    double phi_init;
+    int num_shooting_intervals;
 };
+
+// 2. Integration Grid (The RK4 settings)
+struct IntegratorParams {
+    double dt;
+    int num_steps;
+};
+
+// 3. Root-Finding Settings (The Newton settings)
+struct NewtonParams {
+    int max_iterations;
+    double tolerance;
+};
+
+// This is exactly what the GPU writes to global memory for segment 'k'
+struct SegmentEvaluation {
+    VarState final_state;        // Contains the final 5D state AND the 4x4 M matrix at end of segment
+    double initial_hamiltonian;  // The energy constraint evaluated at the start of the segment
+};
+
+// To track the convergence history per iteration
+struct IterationLog {
+    int iteration_number;
+    double max_defect_norm;
+    double step_size_norm;
+};
+
+// Parameter results for things we're searching for
+struct Result {
+    double optimal_l1_init;
+    double optimal_l2_init;
+    double optimal_cost;
+};
+
+// Output of iterative optimization method looking for a good result, above
+struct OptimizationResult {
+    // Newton optimization result
+    bool success;
+    int num_iterations;
+    double final_error;
+    Result r;
+};
+
+
+
 
 Result solve(double theta, double phi, double alpha);
