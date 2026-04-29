@@ -110,7 +110,32 @@ __host__ __device__ VarState get_derivatives(
     return ds;
 }
 
+__host__ __device__ double compute_hamiltonian(
+    const VarState& state,
+    const SystemParams& params
+) {
+    // Parse out needed quantities
+    double theta = state.theta();
+    double phi   = state.phi();
+    double l1    = state.l1();
+    double l2    = state.l2();
+    double alpha = params.alpha;
+
+    // Compute trig functions (hope compiler optimizes)
+    double sin_t = sin(theta);
+    double cos_t = cos(theta);
+
+    // Compute squared functions
+    double l2_sq = l2 * l2;
+    double phi_sq = phi * phi;
+    double cos_t_sq = cos_t * cos_t;
+
+    // Compute and return hamiltonian
+    double hamiltonian = 1.0 - cos_t + 0.5*phi_sq - 0.5*l2_sq*cos_t_sq + l1*phi + l2*(sin_t - alpha*phi);
+    return hamiltonian;
+}
 
 
+// INTEGRATION KERNELS/FUNCTIONS
 
 
