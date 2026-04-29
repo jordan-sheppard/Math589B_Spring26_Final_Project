@@ -1,6 +1,12 @@
 #pragma once
 
-#include <cstddef> // For std::size_t
+#include <vector>
+#include <Eigen/Sparse>
+#include <Eigen/Dense>
+
+// Type aliases to keep signatures clean
+typedef Eigen::SparseMatrix<double> SparseMat;
+typedef Eigen::VectorXd VectorXd;
 
 
 struct Mat4x4 {
@@ -193,7 +199,82 @@ struct OptimizationResult {
     Result r;
 };
 
+// ---- Physics/derivative computation functions ----
+// Computes the state derivatives/physics ds/dt (along with cost)
+__host__ __device__ void compute_state_physics(const VarState& state, const SystemParams& params, VarState& ds);
 
+// Computes the Jacobian matrix A(s) for the sensitivities M, such that dM/dt = A(s) * M
+__host__ __device__ Mat4x4 compute_sensitivity_jacobian(const VarState& state, const SystemParams& params);
 
+// Computes the derivatives for the entire system (states AND sensitivities)
+__host__ __device__ VarState get_derivatives(const VarState& state, const SystemParams& params);
+
+// ---- Integration functions ----
+// Evaluates the Hamiltonian energy constraint at a specific state
+__host__ __device__ double compute_hamiltonian(const VarState& state, const SystemParams& params);
+
+// Takes a single microscopic RK4 step, updating both the 5D state and 4x4 sensitivity matrix
+__host__ __device__ VarState rk4_step(const VarState& current, const SystemParams& params, double dt_micro);
+
+// Loops rk4_step over the micro-grid and packages the final state/matrix + initial Hamiltonian
+__host__ __device__ SegmentEvaluation simulate_segment(const VarState& initial_guess, const SystemParams& sys_params, const IntegratorParams& int_params);
+
+// ---- GPU Kernel ----
+// Thread k reads the guess for node k, integrates the segment, and writes to segment_results[k]
+__global__ void multiple_shooting_kernel(
+    const double* d_node_guesses,         // Flat array of 4D guesses sitting in GPU memory
+    SegmentEvaluation* d_segment_results, // Output array sitting in GPU memory
+    SystemParams sys_params, 
+    IntegratorParams int_params
+);
+
+ 
+// Launches the GPU kernel, waits for completion, and copies SegmentEvaluations back to the CPU
+std::vector<SegmentEvaluation> evaluate_segments_on_gpu(
+    const std::vector<double>& h_node_guesses, 
+    const SystemParams& sys_params, 
+    const IntegratorParams& int_params
+);
+
+// Translates the SegmentEvaluations into the global defect vector F and sparse Jacobian J
+void build_global_system(
+    const std::vector<double>& guesses, 
+    const std::vector<SegmentEvaluation>& segment_results, 
+    const SystemParams& sys_params,
+    SparseMat& J,
+    VectorXd& F
+);
+
+// Executes a single iteration: 
+// 1. Evaluates segments on GPU 
+// 2. Builds J and F 
+// 3. Solves J * dS = -F using Eigen::SparseLU 
+// 4. Updates guesses array
+IterationLog compute_newton_step(
+    std::vector<double>& node_guesses, // Modified in-place
+    const SystemParams& sys_params, 
+    const IntegratorParams& int_params
+);
+
+// The core loop that calls compute_newton_step until tolerance is met or max_iters is reached
+OptimizationResult solve_multiple_shooting(
+    std::vector<double>& node_guesses, 
+    SystemParams sys_params, 
+    IntegratorParams int_params, 
+    NewtonParams newton_params
+);
+
+// ---- Continuation Loop ----
+// Generates the initial straight-line LQR guess for the very first easy problem
+std::vector<double> generate_lqr_seed(const SystemParams& sys_params);
+
+// The master driver: sweeps theta_init outwards, feeding the converged guess forward each time
+OptimizationResult run_continuation_sweep(
+    double final_theta, 
+    int continuation_steps, 
+    SystemParams base_sys_params, 
+    IntegratorParams int_params, 
+    NewtonParams newton_params
+);
 
 Result solve(double theta, double phi, double alpha);
