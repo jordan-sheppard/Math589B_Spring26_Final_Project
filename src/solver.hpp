@@ -4,14 +4,14 @@
 
 
 struct Mat4x4 {
-    float data[16];
+    double data[16];
 
     // --- 2D Accessors ---
     // Allows you to use M(row, col) instead of M[row * 4 + col]
-    __host__ __device__ float& operator()(int r, int c) {
+    __host__ __device__ double& operator()(int r, int c) {
         return data[r * 4 + c];
     }
-    __host__ __device__ const float& operator()(int r, int c) const {
+    __host__ __device__ const double& operator()(int r, int c) const {
         return data[r * 4 + c];
     }
 
@@ -32,7 +32,7 @@ struct Mat4x4 {
         Mat4x4 result;
         #pragma unroll
         for(int i = 0; i < 16; i++) {
-            result.data[i] = this->data[i] + other.data[i];
+            result.data[i] = this->data[i] - other.data[i];
         }
         return result;
     }
@@ -57,7 +57,7 @@ struct Mat4x4 {
     }
 
     // --- Scalar Multiplication --- 
-    __host__ __device__ Mat4x4 operator*(float scalar) const {
+    __host__ __device__ Mat4x4 operator*(double scalar) const {
         Mat4x4 result;
         #pragma unroll
         for(int i = 0; i < 16; i++) {
@@ -75,24 +75,24 @@ inline Mat4x4 operator*(double scalar, const Mat4x4& M) {
 
 
 struct VarState {
-    float s[5];     // 4D physical state [theta, phi, l1, l2] + cost
+    double s[5];     // 4D physical state [theta, phi, l1, l2] + cost
     Mat4x4 M;       // 4x4 sensitivity matrix to initial conditions
 
     // --- Inline Reference Accessors --
-    __host__ __device__ float& theta() { return s[0]; }
-    __host__ __device__ const float& theta() const { return s[0]; }
+    __host__ __device__ double& theta() { return s[0]; }
+    __host__ __device__ const double& theta() const { return s[0]; }
 
-    __host__ __device__ float& phi() { return s[1]; }
-    __host__ __device__ const float& phi() const { return s[1]; }
+    __host__ __device__ double& phi() { return s[1]; }
+    __host__ __device__ const double& phi() const { return s[1]; }
 
-    __host__ __device__ float& l1() { return s[2]; }
-    __host__ __device__ const float& l1() const { return s[2]; }
+    __host__ __device__ double& l1() { return s[2]; }
+    __host__ __device__ const double& l1() const { return s[2]; }
 
-    __host__ __device__ float& l2() { return s[3]; }
-    __host__ __device__ const float& l2() const { return s[3]; }
+    __host__ __device__ double& l2() { return s[3]; }
+    __host__ __device__ const double& l2() const { return s[3]; }
 
-    __host__ __device__ float& cost() { return s[4]; }
-    __host__ __device__ const float& cost() const { return s[4]; }
+    __host__ __device__ double& cost() { return s[4]; }
+    __host__ __device__ const double& cost() const { return s[4]; }
 
     // Overload Addition/Subtraction/Scalar Multiplication
     __host__ __device__ VarState operator+(const VarState& other) const {
@@ -105,7 +105,7 @@ struct VarState {
         }
 
         // Add sensitivity matrices
-        result.M = this->M + other.m;
+        result.M = this->M + other.M;
         return result;
     }
 
@@ -119,11 +119,11 @@ struct VarState {
         }
 
         // Add sensitivity matrices
-        result.M = this->M - other.m;
+        result.M = this->M - other.M;
         return result;
     }
 
-    __host__ __device__ VarState operator*(float scalar) const {
+    __host__ __device__ VarState operator*(double scalar) const {
         VarState result;
 
         // Scalar multiply states
@@ -140,7 +140,7 @@ struct VarState {
 
 // Makes scalar multiplication for VarState okay on both sides
 __host__ __device__
-inline VarState operator*(double scalar, const VarSate& vec) {
+inline VarState operator*(double scalar, const VarState& vec) {
     return vec * scalar;
 }
 
