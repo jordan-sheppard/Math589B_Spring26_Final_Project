@@ -3,7 +3,37 @@
 #include <cstddef> // For std::size_t
 
 
+struct Mat4x4 {
+    float data[16];
 
+    // --- 2D Accessors ---
+    // Allows you to use M(row, col) instead of M[row * 4 + col]
+    __host__ __device__ float& operator()(int r, int c) {
+        return data[r * 4 + c];
+    }
+    __host__ __device__ const float& operator()(int r, int c) const {
+        return data[r * 4 + c];
+    }
+
+    // --- Matrix Multiplication ---
+    __host__ __device__
+    Mat4x4 operator*(const Mat4x4& other) const {
+        Mat4x4 result;
+        
+        // Force the CUDA compiler to flatten these loops into straight-line code for performance
+        #pragma unroll
+        for (int r = 0; r < 4; r++) {
+            #pragma unroll
+            for (int c = 0; c < 4; c++) {
+                result(r, c) = (*this)(r, 0) * other(0, c) + 
+                               (*this)(r, 1) * other(1, c) + 
+                               (*this)(r, 2) * other(2, c) + 
+                               (*this)(r, 3) * other(3, c);
+            }
+        }
+        return result;
+    }
+};
 
 
 struct VarState {
@@ -50,7 +80,7 @@ struct VarState {
     }
 };
 
-// Makes scalar multiplication okay on both sides
+// Makes scalar multiplication for VarState okay on both sides
 __host__ __device__
 inline VarState operator*(double scalar, const VarSate& vec) {
     return vec * scalar;
