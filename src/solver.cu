@@ -10,6 +10,8 @@
 #include <Eigen/Dense>
 
 
+// ********* ODE PHYSICS SIMULATION FUNCTIONS *********
+
 __host__ __device__ void compute_state_physics(
     const VarState& state,
     const SystemParams& params,
@@ -72,7 +74,7 @@ __host__ __device__ Mat4x4 compute_sensitivity_jacobian(
     A(0, 3) = 0.;
 
     // Row 1 
-    A(1, 0) = cos_t + 2 * l2 * cos_t * sin_t;
+    A(1, 0) = cos_t + 2.0 * l2 * cos_t * sin_t;
     A(1, 1) = -alpha;
     A(1, 2) = 0.;
     A(1, 3) = -cos_t_sq;
@@ -81,7 +83,7 @@ __host__ __device__ Mat4x4 compute_sensitivity_jacobian(
     A(2, 0) = -(l2_sq * (cos_t_sq - sin_t_sq) - l2 * sin_t + cos_t);
     A(2, 1) = 0.;
     A(2, 2) = 0.;
-    A(2, 3) = -(2 * l2 * cos_t * sin_t + cos_t);
+    A(2, 3) = -(2.0 * l2 * cos_t * sin_t + cos_t);
 
     // Row 3
     A(3, 0) = 0.;
@@ -91,3 +93,24 @@ __host__ __device__ Mat4x4 compute_sensitivity_jacobian(
 
     return A;
 }
+
+__host__ __device__ VarState get_derivatives(
+    const VarState& state,
+    const SystemParams& params
+) {
+    VarState ds;
+
+    // Compute/store ds/dt
+    compute_state_physics(state, params, ds);
+
+    // Compute/store dM/dt 
+    Mat4x4 A = compute_sensitivity_jacobian(state, params);
+    ds.M = A * state.M;
+
+    return ds;
+}
+
+
+
+
+
