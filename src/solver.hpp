@@ -351,27 +351,24 @@ IterationLog compute_newton_step(
     const IntegratorParams& int_params
 );
 
-// Generates an initial guess (currently uses LQR and linear interpolation...)
-std::vector<SegmentEvaluation> compute_linear_initial_guess(
-    SystemParams sys_params
+// Generates an initial guess (linear interpolation)
+std::vector<double> compute_linear_initial_guess(
+    const SystemParams& sys_params
 );
 
 // The core loop that calls compute_newton_step until tolerance is met or max_iters is reached
-// given an initial guess for the initial conditions of each segment
 OptimizationResult solve_multiple_shooting(
-    std::vector<double>& flat_node_guesses, // Input guesses (from LQR or Continuation)
-    SystemParams sys_params, 
-    IntegratorParams int_params, 
-    NewtonParams newton_params
+    std::vector<double>& flat_node_guesses, // Notice: non-const reference
+    const SystemParams& sys_params,         // Notice: const reference
+    const IntegratorParams& int_params,     // Notice: const reference
+    const NewtonParams& newton_params       // Notice: const reference
 );
 
-// An overloaded version of the core loop that has no initial guess, and computes
-// a linear initial guess interpolating the initial and final states before
-// then running the newton iteration.
+// The Testing Wrapper
 OptimizationResult solve_multiple_shooting(
-    SystemParams sys_params, 
-    IntegratorParams int_params, 
-    NewtonParams newton_params
+    SystemParams sys_params,                // Notice: pass by value (matches solver.cu!)
+    IntegratorParams int_params,            // Notice: pass by value
+    NewtonParams newton_params              // Notice: pass by value
 );
 
 // Main driver; guesses optimal initial costates and costs for given initial
