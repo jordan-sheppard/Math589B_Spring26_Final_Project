@@ -401,7 +401,7 @@ IterationLog compute_newton_step(
 }
 
 OptimizationResult solve_multiple_shooting(
-    const std::vector<double>& flat_node_guesses, // Input guesses (from LQR or Continuation)
+    std::vector<double>& flat_node_guesses, // Input guesses (from LQR or Continuation)
     const SystemParams& sys_params,
     const IntegratorParams& int_params,
     const NewtonParams& newton_params
@@ -454,7 +454,97 @@ OptimizationResult solve_multiple_shooting(
     }
     final_result.r.optimal_cost = total_cost;
 
+    if (converged) {
+        flat_node_guesses = solver_arrays.h_node_guesses;       // Update initial guesses
+    }
+    
     return final_result;
+}
+
+std::vector<double> compute_linear_initial_guess(const SystemParams& sys_params) {
+    int N = sys_params.num_shooting_intervals;
+    std::vector<double> guess(N * 4, 0.0);
+
+    for (int k = 0; k < N; k++) {
+        // How far along the trajectory are we? (0.0 at start, approaches 1.0 at end)
+        double fraction = static_cast<double>(k) / N;
+
+        // Linearly interpolate the states from the initial condition to the origin (0,0)
+        double theta_k = sys_params.theta_init * (1.0 - fraction);
+        double phi_k   = sys_params.phi_init * (1.0 - fraction);
+
+        // Store in the flat array
+        guess[k * 4 + 0] = theta_k;
+        guess[k * 4 + 1] = phi_k;
+        
+        // For nearly linear cases, guessing 0.0 for the costates is perfectly fine.
+        // The Multiple Shooting Newton solver will snap them to the LQR values almost instantly.
+        guess[k * 4 + 2] = 0.0; // l1
+        guess[k * 4 + 3] = 0.0; // l2
+    }
+
+    return guess;
+}
+
+
+// The Testing Wrapper
+OptimizationResult solve_multiple_shooting(
+    SystemParams sys_params, 
+    IntegratorParams int_params, 
+    NewtonParams newton_params
+) {
+    // 1. Generate the simple straight-line guess
+    std::vector<double> initial_guess = compute_linear_initial_guess(sys_params);
+    
+    // 2. Pass it into the core engine
+    return solve_multiple_shooting(initial_guess, sys_params, int_params, newton_params);
+}
+
+
+
+Result solve(double theta, double phi, double alpha) {
+    // Multiple shooting parameters
+    const int NUM_SHOOTING_INTERVALS = 20;
+
+    // Integration parameters
+    const double INTEGRATION_DT = 0.025;
+    const int NUM_INTEGRATION_STEPS = 10;       // 5 seconds of total time
+
+    // Newton's method parameters
+    const int MAX_NEWTON_ITERATIONS = 15;
+    const double NEWTON_TOL = 1e-6;
+
+    // Package all parameters to run algorithm
+    SystemParams sys_params;
+    sys_params.alpha = alpha;
+    sys_params.theta_init = theta;
+    sys_params.phi_init = phi;
+    sys_params.num_shooting_intervals = NUM_SHOOTING_INTERVALS;
+
+    IntegratorParams int_params;
+    int_params.dt = INTEGRATION_DT;
+    int_params.num_steps = NUM_INTEGRATION_STEPS;
+
+    NewtonParams newton_params;
+    newton_params.max_iterations = MAX_NEWTON_ITERATIONS;
+    newton_params.tolerance = NEWTON_TOL;
+
+    // Run the solver!
+    std::printf("Starting Multiple Shooting Solver for Theta = %.6f, Phi = %.6f...\n", sys_params.theta_init, sys_params.phi_init);
+
+    OptimizationResult result = solve_multiple_shooting(sys_params, int_params, newton_params);
+
+    // 5. Check results
+    if (result.success) {
+        std::printf("\nSUCCESS! Converged in %d iterations.\n", result.num_iterations);
+        std::printf("Optimal L1(0): %.10f\n", result.r.optimal_l1_init);
+        std::printf("Optimal L2(0): %.10f\n", result.r.optimal_l2_init);
+        std::printf("Total Cost:    %.10f\n", result.r.optimal_cost);
+    } else {
+        std::printf("\nFAILED to converge. Final Newton Error: %e\n", result.final_error);
+    }
+
+    return result.r;
 }
 
 
