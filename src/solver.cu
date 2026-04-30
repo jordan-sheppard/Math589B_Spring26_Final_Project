@@ -431,7 +431,7 @@ OptimizationResult solve_multiple_shooting(
             current_error = 1e9; // Force a massive error
             break;
         }
-        
+
         current_error = log.max_defect_norm;
 
         // Print progress (optional, but highly recommended for debugging)
@@ -524,6 +524,9 @@ Result solve(double theta, double phi, double alpha) {
     const int MAX_NEWTON_ITERATIONS = 15;
     const double NEWTON_TOL = 1e-6;
 
+    // Continuation parameters
+    const double MIN_CONTINUATION_STEP_SIZE = 1e-4;
+
     // Package all parameters to run algorithm
     SystemParams sys_params;
     sys_params.alpha = alpha;
@@ -539,22 +542,79 @@ Result solve(double theta, double phi, double alpha) {
     newton_params.max_iterations = MAX_NEWTON_ITERATIONS;
     newton_params.tolerance = NEWTON_TOL;
 
-    // Run the solver!
-    std::printf("Starting Multiple Shooting Solver for Theta = %.6f, Phi = %.6f...\n", sys_params.theta_init, sys_params.phi_init);
-
-    OptimizationResult result = solve_multiple_shooting(sys_params, int_params, newton_params);
-
-    // 5. Check results
-    if (result.success) {
-        std::printf("\nSUCCESS! Converged in %d iterations.\n", result.num_iterations);
-        std::printf("Optimal L1(0): %.10f\n", result.r.optimal_l1_init);
-        std::printf("Optimal L2(0): %.10f\n", result.r.optimal_l2_init);
-        std::printf("Total Cost:    %.10f\n", result.r.optimal_cost);
-    } else {
-        std::printf("\nFAILED to converge. Final Newton Error: %e\n", result.final_error);
+    // 2. 2D Adaptive Homotopy Continuation Setup
+    // Calculate how far the target is from the origin to pick a safe starting point for continuation
+    double target_norm = std::sqrt(target_theta * target_theta + target_phi * target_phi);
+    
+    double current_s = 1.0;             // For "small enough" initial guesses, don't run continuation - just solve from that point
+    if (target_norm > 0.05) {
+        current_s = 0.05 / target_norm; // Start at a safe linear distance (norm approx 0.05)
     }
 
-    return result.r;
+    double ds = 0.1; // Start by attempting 10% jumps along the path
+    
+    std::printf("Starting Multiple Shooting Solver for Theta = %.6f, Phi = %.6f...\n", sys_params.theta_init, sys_params.phi_init);
+
+    // 3. Generate and solve the initial seed
+    sys_params.theta_init = current_s * target_theta;
+    sys_params.phi_init   = current_s * target_phi;
+    
+    std::vector<double> active_trajectory = compute_linear_initial_guess(sys_params);
+    OptimizationResult last_success = solve_multiple_shooting(active_trajectory, sys_params, int_params, newton_params);
+
+    if (!last_success.success) {
+        std::printf("Failed to converge on the initial seed! Check your math.\n");
+        return last_success.r;
+    }
+
+    while (current_s < 1.0) {
+        // Walk along path by incrementing s, capped at s=1.0 (the final target)
+        double next_s = std::min(current_s + ds, 1.0);
+
+        sys_params.theta_init = next_s * target_theta;
+        sys_params.phi_init   = next_s * target_phi;
+        
+        std::printf("\n=== Adaptive Step: s = %.4f (Theta = %.4f, Phi = %.4f) ===\n", 
+                    next_s, sys_params.theta_init, sys_params.phi_init);
+        
+        // Make a copy to protect our last known good state
+        std::vector<double> candidate_trajectory = active_trajectory;
+
+        // Try to solve
+        OptimizationResult result = solve_multiple_shooting(candidate_trajectory, sys_params, int_params, newton_params);
+
+        if (result.success) {
+            // STEP ACCEPTED!
+            current_s = next_s;
+            active_trajectory = candidate_trajectory;
+            last_success = result;
+
+            // Speed up if it was easy
+            if (result.num_iterations <= 4) {
+                ds *= 1.5; 
+                std::printf("  -> Fast convergence! Increasing step size to ds = %.5f\n", ds);
+            }
+        } else {
+            // STEP REJECTED!
+            ds *= 0.5; // Cut the step size in half
+            std::printf("  -> Step failed! Shrinking step size to ds = %.5f\n", ds);
+
+            if (ds < MIN_DS) {
+                std::printf("CRITICAL FAILURE: Manifold lost. ds too small.\n");
+                break;
+            }
+        }
+    }
+
+    // Display results
+    std::printf("\n>>> SOLVER FINISHED. Final State Reached: Theta = %.4f, Phi = %.4f <<<\n\n", 
+                sys_params.theta_init, sys_params.phi_init);
+                
+    std::printf("Optimal L1(0): %.10f\n", last_success.r.optimal_l1_init);
+    std::printf("Optimal L2(0): %.10f\n", last_success.r.optimal_l2_init);
+    std::printf("Total Cost:    %.10f\n", last_success.r.optimal_cost);
+
+    return last_success.r;      // Only return best guess from successful continuation step...
 }
 
 

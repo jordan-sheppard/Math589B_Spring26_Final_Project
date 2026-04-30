@@ -364,20 +364,6 @@ OptimizationResult solve_multiple_shooting(
     NewtonParams newton_params
 );
 
-// ---- Continuation Loop ----
-
-// Generates the initial straight-line LQR guess for the very first easy problem
-std::vector<double> generate_lqr_seed(const SystemParams& sys_params);
-
-// The master driver: sweeps theta_init outwards, feeding the converged guess forward each time
-OptimizationResult run_continuation_sweep(
-    double final_theta, 
-    int continuation_steps, 
-    SystemParams base_sys_params, 
-    IntegratorParams int_params, 
-    NewtonParams newton_params
-);
-
 // Main driver; gets optimal initial costates and costs for given initial
-// theta and phi, and friction parameter alpha
+// theta and phi, and friction parameter alpha, and runs continuation on it.
 Result solve(double theta, double phi, double alpha);
