@@ -400,9 +400,62 @@ IterationLog compute_newton_step(
     return log;
 }
 
+OptimizationResult solve_multiple_shooting(
+    const std::vector<double>& flat_node_guesses, // Input guesses (from LQR or Continuation)
+    const SystemParams& sys_params,
+    const IntegratorParams& int_params,
+    const NewtonParams& newton_params
+) {
+    // 1. Initialize the Memory Workspace (Allocates GPU memory once!)
+    HDArrays solver_arrays(sys_params.num_shooting_intervals);
+    
+    // 2. Load the initial guesses into the workspace
+    solver_arrays.h_node_guesses = flat_node_guesses;
 
+    // 3. Set up loop variables
+    int iteration = 0;
+    double current_error = 1e9; // Start with a massive error
+    bool converged = false;
 
+    // 4. The Newton-Raphson Loop
+    while (iteration < newton_params.max_iterations) {
+        
+        // Take a single step
+        IterationLog log = compute_newton_step(solver_arrays, sys_params, int_params);
+        current_error = log.max_defect_norm;
 
+        // Print progress (optional, but highly recommended for debugging)
+        printf("Iter %d | Max Defect: %.10e | Step Size: %.10e\n", 
+               iteration, log.max_defect_norm, log.step_size_norm);
+
+        // Check for convergence
+        if (current_error < newton_params.tolerance) {
+            converged = true;
+            break; // Exit the loop early!
+        }
+
+        iteration++;
+    }
+
+    // 5. Package the final results
+    OptimizationResult final_result;
+    final_result.success = converged;
+    final_result.num_iterations = iteration;
+    final_result.final_error = current_error;
+
+    // Extract the "Holy Grail" - the optimized initial costates from Node 0
+    final_result.r.optimal_l1_init = solver_arrays.h_node_guesses[2];
+    final_result.r.optimal_l2_init = solver_arrays.h_node_guesses[3];
+
+    // Calculate total trajectory cost by summing the running cost of all converged segments
+    double total_cost = 0.0;
+    for (int k = 0; k < sys_params.num_shooting_intervals; k++) {
+        total_cost += solver_arrays.h_segment_results[k].final_state.cost();
+    }
+    final_result.r.optimal_cost = total_cost;
+
+    return final_result;
+}
 
 
 

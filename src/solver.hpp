@@ -350,9 +350,14 @@ IterationLog compute_newton_step(
     const IntegratorParams& int_params
 );
 
+// Generates an initial guess (currently uses LQR and linear interpolation...)
+std::vector<SegmentEvaluation> compute_initial_guess(
+    SystemParams sys_params
+);
+
 // The core loop that calls compute_newton_step until tolerance is met or max_iters is reached
 OptimizationResult solve_multiple_shooting(
-    HDArrays& solver_arrays,            // Modified in place 
+    const std::vector<double>& flat_node_guesses, // Input guesses (from LQR or Continuation)
     SystemParams sys_params, 
     IntegratorParams int_params, 
     NewtonParams newton_params
