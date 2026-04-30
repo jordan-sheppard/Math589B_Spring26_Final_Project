@@ -368,6 +368,8 @@ IterationLog compute_newton_step(
     const SystemParams& sys_params, 
     const IntegratorParams& int_params
 ) {
+    IterationLog log;       // For storing outputs 
+
     // 1. Run GPU multiple shooting simulation
     evaluate_segments_on_gpu(solver_arrays, sys_params, int_params);
 
@@ -382,7 +384,8 @@ IterationLog compute_newton_step(
     solver.compute(J);      // Computes sparse LU-factorization of J
     if (solver.info() != Eigen::Success) {
         printf("Eigen SparseLU failed to factorize the Jacobian!\n");
-        // TODO: Handle error (e.g., return a failed log)
+        log.success = false;
+        return log;
     }
 
     VectorXd dS = solver.solve(-F);                         // Newton's method correction
@@ -393,7 +396,6 @@ IterationLog compute_newton_step(
     }
 
     // 5. Package IterationLog
-    IterationLog log;
     log.max_defect_norm = F.lpNorm<Eigen::Infinity>();      // Maximum absolute error
     log.step_size_norm = dS.norm();                         // How large our step was
 
@@ -422,6 +424,14 @@ OptimizationResult solve_multiple_shooting(
         
         // Take a single step
         IterationLog log = compute_newton_step(solver_arrays, sys_params, int_params);
+
+        // Abort the Newton loop if Eigen exploded (pass to other continuation loop)
+        if (!log.success) {
+            converged = false;
+            current_error = 1e9; // Force a massive error
+            break;
+        }
+        
         current_error = log.max_defect_norm;
 
         // Print progress (optional, but highly recommended for debugging)

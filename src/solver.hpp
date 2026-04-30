@@ -204,6 +204,7 @@ struct DeviceArrays {
 
 // 6. To track the convergence history per iteration
 struct IterationLog {
+    bool success = true;            // Whether Newton step succeeded or not (default to true)
     double max_defect_norm;
     double step_size_norm;
 };
