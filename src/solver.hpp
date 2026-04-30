@@ -329,7 +329,7 @@ void evaluate_segments_on_gpu(
     HDArrays& solver_arrays, 
     const SystemParams& sys_params, 
     const IntegratorParams& int_params
-)
+);
 
 // Translates the SegmentEvaluations into the global defect vector F and sparse Jacobian J
 void build_global_system(

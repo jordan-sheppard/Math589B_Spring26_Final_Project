@@ -185,24 +185,24 @@ SegmentEvaluation simulate_segment(
         #pragma unroll
         for (int c = 0; c < 4; c++) {
             if (r == c) {
-                current.M(r, c) = 1.0;
+                current_state.M(r, c) = 1.0;
             } else {
-                current.M(r, c) = 0.0;
+                current_state.M(r, c) = 0.0;
             }
         }
     }
 
     // 3. Compute the Hamiltonian constraint at the START of the segment
-    double init_H = compute_hamiltonian(current, sys_params);
+    double init_H = compute_hamiltonian(current_state, sys_params);
 
     // 4. Integrate forward in time using RK4
     for (int step = 0; step < int_params.num_steps; step++) {
-        current = rk4_step(current, sys_params, int_params.dt);
+        current_state = rk4_step(current_state, sys_params, int_params.dt);
     }
 
     // 5. Package and return results 
     SegmentEvaluation result;
-    result.final_state = current;
+    result.final_state = current_state;
     result.initial_hamiltonian = init_H;
 
     return result;

@@ -14,6 +14,6 @@ int main(int argc, char** argv) {
 
     Result r = solve(theta, phi, alpha);
 
-    std::printf("%.10f %.10f %.10f\n", r.l1, r.l2, r.cost);
+    std::printf("%.10f %.10f %.10f\n", r.optimal_l1_init, r.optimal_l2_init, r.optimal_cost);
     return 0;
 }
