@@ -204,7 +204,6 @@ struct DeviceArrays {
 
 // 6. To track the convergence history per iteration
 struct IterationLog {
-    int iteration_number;
     double max_defect_norm;
     double step_size_norm;
 };
@@ -348,8 +347,7 @@ void build_global_system(
 IterationLog compute_newton_step(
     HDArrays& solver_arrays,            // Modified in place
     const SystemParams& sys_params, 
-    const IntegratorParams& int_params, 
-    int iteration_number
+    const IntegratorParams& int_params
 );
 
 // The core loop that calls compute_newton_step until tolerance is met or max_iters is reached

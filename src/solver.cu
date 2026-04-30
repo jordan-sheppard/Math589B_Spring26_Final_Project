@@ -366,8 +366,7 @@ void build_global_system(
 IterationLog compute_newton_step(
     HDArrays& solver_arrays,            // Modified in place
     const SystemParams& sys_params, 
-    const IntegratorParams& int_params, 
-    int iteration_number
+    const IntegratorParams& int_params
 ) {
     // 1. Run GPU multiple shooting simulation
     evaluate_segments_on_gpu(solver_arrays, sys_params, int_params);
@@ -395,12 +394,13 @@ IterationLog compute_newton_step(
 
     // 5. Package IterationLog
     IterationLog log;
-    log.iteration_number = iteration_number;
     log.max_defect_norm = F.lpNorm<Eigen::Infinity>();      // Maximum absolute error
     log.step_size_norm = dS.norm();                         // How large our step was
 
     return log;
 }
+
+
 
 
 
