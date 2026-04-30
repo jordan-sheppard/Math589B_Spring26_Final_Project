@@ -512,8 +512,8 @@ OptimizationResult solve_multiple_shooting(
 
 
 
-Result solve(double theta, double phi, double alpha) {
-    // Multiple shooting parameters
+Result solve(double target_theta, double target_phi, double alpha) {
+    // Multiple shooting parameteris
     const int NUM_SHOOTING_INTERVALS = 20;
 
     // Integration parameters
@@ -530,8 +530,8 @@ Result solve(double theta, double phi, double alpha) {
     // Package all parameters to run algorithm
     SystemParams sys_params;
     sys_params.alpha = alpha;
-    sys_params.theta_init = theta;
-    sys_params.phi_init = phi;
+    sys_params.theta_init = target_theta;
+    sys_params.phi_init = target_phi;
     sys_params.num_shooting_intervals = NUM_SHOOTING_INTERVALS;
 
     IntegratorParams int_params;
@@ -599,7 +599,7 @@ Result solve(double theta, double phi, double alpha) {
             ds *= 0.5; // Cut the step size in half
             std::printf("  -> Step failed! Shrinking step size to ds = %.5f\n", ds);
 
-            if (ds < MIN_DS) {
+            if (ds < MIN_CONTINUATION_STEP_SIZE) {
                 std::printf("CRITICAL FAILURE: Manifold lost. ds too small.\n");
                 break;
             }
