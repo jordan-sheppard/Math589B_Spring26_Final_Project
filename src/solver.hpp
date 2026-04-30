@@ -1,12 +1,32 @@
 #pragma once
 
 #include <vector>
+#include <cstdio>
 #include <Eigen/Sparse>
 #include <Eigen/Dense>
 
 // Type aliases to keep signatures clean
 typedef Eigen::SparseMatrix<double> SparseMat;
 typedef Eigen::VectorXd VectorXd;
+
+// ---- GPU Error Checking ----
+
+// Macro that checks for any errors in a CUDA operation,
+// and if it has one, captures the file name and line number where the error occurred
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+
+// Evaluates any returned CUDA error code
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      // Prints the human-readable error string from CUDA
+      std::fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      
+      // Kills the program if abort is true
+      if (abort) std::exit(code);
+   }
+}
 
 
 struct Mat4x4 {
@@ -170,33 +190,85 @@ struct NewtonParams {
     double tolerance;
 };
 
-// This is exactly what the GPU writes to global memory for segment 'k'
+// 4. What the GPU writes to global memory for segment 'k'
 struct SegmentEvaluation {
     VarState final_state;        // Contains the final 5D state AND the 4x4 M matrix at end of segment
     double initial_hamiltonian;  // The energy constraint evaluated at the start of the segment
 };
 
-// To track the convergence history per iteration
+// 5. Device array addresses (for passing to the GPU)
+struct DeviceArrays {
+    double* node_guesses;
+    SegmentEvaluation* segment_results;
+};
+
+// 6. To track the convergence history per iteration
 struct IterationLog {
     int iteration_number;
     double max_defect_norm;
     double step_size_norm;
 };
 
-// Parameter results for things we're searching for
+// 7. Parameter results for things we're searching for
 struct Result {
     double optimal_l1_init;
     double optimal_l2_init;
     double optimal_cost;
 };
 
-// Output of iterative optimization method looking for a good result, above
+// 8. Output of iterative optimization method looking for a good result, above
 struct OptimizationResult {
     // Newton optimization result
     bool success;
     int num_iterations;
     double final_error;
     Result r;
+};
+
+
+
+struct HDArrays {
+    // 1. Host Memory (CPU)
+    std::vector<double> h_node_guesses;
+    std::vector<SegmentEvaluation> h_segment_results;
+
+    // 2. Device Memory (GPU)
+    double* d_node_guesses;
+    SegmentEvaluation* d_segment_results;
+
+    // 3. Constructor: Allocates CPU and GPU memory ONCE
+    HDArrays(int num_intervals) {
+        int num_states = num_intervals * 4;
+
+        // Size the CPU vectors
+        h_node_guesses.resize(num_states, 0.0);
+        h_segment_results.resize(num_intervals);
+
+        // Allocate the GPU memory
+        gpuErrchk(cudaMalloc(&d_node_guesses, num_states * sizeof(double)));
+        gpuErrchk(cudaMalloc(&d_segment_results, num_intervals * sizeof(SegmentEvaluation)));
+    }
+
+    // 4. Memory Transfer Methods
+    void copy_guesses_to_device() {
+        size_t bytes = h_node_guesses.size() * sizeof(double);
+        gpuErrchk(cudaMemcpy(d_node_guesses, h_node_guesses.data(), bytes, cudaMemcpyHostToDevice));
+    }
+
+    void copy_results_to_host() {
+        size_t bytes = h_segment_results.size() * sizeof(SegmentEvaluation);
+        gpuErrchk(cudaMemcpy(h_segment_results.data(), d_segment_results, bytes, cudaMemcpyDeviceToHost));
+    }
+
+    DeviceArrays get_device_arrays() const {
+        return {d_node_guesses, d_segment_results};
+    }
+
+    // 5. Destructor: Automatically frees GPU memory when the struct is destroyed
+    ~HDArrays() {
+        gpuErrchk(cudaFree(d_node_guesses));
+        gpuErrchk(cudaFree(d_segment_results));
+    }
 };
 
 // ---- Physics/derivative computation functions ----
@@ -247,19 +319,18 @@ __host__ __device__ SegmentEvaluation simulate_segment(
 
 // Thread k reads the guess for node k, integrates the segment, and writes to segment_results[k]
 __global__ void multiple_shooting_kernel(
-    const double* d_node_guesses,         // Flat array of 4D guesses sitting in GPU memory
-    SegmentEvaluation* d_segment_results, // Output array sitting in GPU memory
+    DeviceArrays d,
     SystemParams sys_params, 
     IntegratorParams int_params
 );
 
  
 // Launches the GPU kernel, waits for completion, and copies SegmentEvaluations back to the CPU
-std::vector<SegmentEvaluation> evaluate_segments_on_gpu(
-    const std::vector<double>& h_node_guesses, 
+void evaluate_segments_on_gpu(
+    HDArrays& solver_arrays, 
     const SystemParams& sys_params, 
     const IntegratorParams& int_params
-);
+)
 
 // Translates the SegmentEvaluations into the global defect vector F and sparse Jacobian J
 void build_global_system(

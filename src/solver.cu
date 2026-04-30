@@ -211,8 +211,7 @@ SegmentEvaluation simulate_segment(
 // Each thread reads the guess for its corresponding node, integrates the segment, and writes to segment_results[k]
 __global__ 
 void multiple_shooting_kernel(
-    const double* d_node_guesses,         // Flat array of 4D guesses sitting in GPU memory
-    SegmentEvaluation* d_segment_results, // Output array sitting in GPU memory
+    DeviceArrays d,
     SystemParams sys_params, 
     IntegratorParams int_params
 ) {
@@ -227,18 +226,41 @@ void multiple_shooting_kernel(
     // 3. Extract the initial guess for this specific node from the flat array
     // Note: simulate_segment handles initializing cost to 0.0 and M to the Identity matrix
     VarState initial_guess;
-    initial_guess.theta() = d_node_guesses[k * 4 + 0];
-    initial_guess.phi()   = d_node_guesses[k * 4 + 1];
-    initial_guess.l1()    = d_node_guesses[k * 4 + 2];
-    initial_guess.l2()    = d_node_guesses[k * 4 + 3];
+    initial_guess.theta() = d.node_guesses[k * 4 + 0];
+    initial_guess.phi()   = d.node_guesses[k * 4 + 1];
+    initial_guess.l1()    = d.node_guesses[k * 4 + 2];
+    initial_guess.l2()    = d.node_guesses[k * 4 + 3];
 
     // 4. Run the full RK4 integration and sensitivity propagation for this segment
     SegmentEvaluation result = simulate_segment(initial_guess, sys_params, int_params);
 
     // 5. Write the integrated state, matrices, and Hamiltonian back to global memory
-    d_segment_results[k] = result;
+    d.segment_results[k] = result;
 }
 
+// Launches the GPU kernel, waits for completion, and copies SegmentEvaluations back to the CPU
+void evaluate_segments_on_gpu(
+    HDArrays& solver_arrays, 
+    const SystemParams& sys_params, 
+    const IntegratorParams& int_params
+) {
+    // 1. Copy initial state guesses for each segment from CPU to GPU
+    solver_arrays.copy_guesses_to_device();
 
+    // 2. Configure Grid
+    int threads_per_block = 256;
+    int blocks_per_grid = (sys_params.num_shooting_intervals + threads_per_block - 1) / threads_per_block;
+
+    // 3. Launch GPU Kernel
+    multiple_shooting_kernel<<<blocks_per_grid, threads_per_block>>>(
+        solver_arrays.get_device_arrays(), 
+        sys_params, 
+        int_params
+    );
+    gpuErrchk(cudaDeviceSynchronize());
+
+    // 4. Retrieve evaluated state data from GPU; copy to CPU
+    solver_arrays.copy_results_to_host();
+}
 
 
