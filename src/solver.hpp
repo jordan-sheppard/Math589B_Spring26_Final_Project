@@ -352,18 +352,28 @@ IterationLog compute_newton_step(
 );
 
 // Generates an initial guess (currently uses LQR and linear interpolation...)
-std::vector<SegmentEvaluation> compute_initial_guess(
+std::vector<SegmentEvaluation> compute_linear_initial_guess(
     SystemParams sys_params
 );
 
 // The core loop that calls compute_newton_step until tolerance is met or max_iters is reached
+// given an initial guess for the initial conditions of each segment
 OptimizationResult solve_multiple_shooting(
-    const std::vector<double>& flat_node_guesses, // Input guesses (from LQR or Continuation)
+    std::vector<double>& flat_node_guesses, // Input guesses (from LQR or Continuation)
     SystemParams sys_params, 
     IntegratorParams int_params, 
     NewtonParams newton_params
 );
 
-// Main driver; gets optimal initial costates and costs for given initial
+// An overloaded version of the core loop that has no initial guess, and computes
+// a linear initial guess interpolating the initial and final states before
+// then running the newton iteration.
+OptimizationResult solve_multiple_shooting(
+    SystemParams sys_params, 
+    IntegratorParams int_params, 
+    NewtonParams newton_params
+);
+
+// Main driver; guesses optimal initial costates and costs for given initial
 // theta and phi, and friction parameter alpha, and runs continuation on it.
-Result solve(double theta, double phi, double alpha);
+Result solve(double target_theta, double target_phi, double alpha);
