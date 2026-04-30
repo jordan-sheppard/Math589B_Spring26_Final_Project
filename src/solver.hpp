@@ -348,7 +348,8 @@ void build_global_system(
 IterationLog compute_newton_step(
     HDArrays& solver_arrays,            // Modified in place
     const SystemParams& sys_params, 
-    const IntegratorParams& int_params
+    const IntegratorParams& int_params, 
+    int iteration_number
 );
 
 // The core loop that calls compute_newton_step until tolerance is met or max_iters is reached

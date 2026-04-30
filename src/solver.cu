@@ -357,4 +357,52 @@ void build_global_system(
     J.setFromTriplets(triplets.begin(), triplets.end());
 }
 
+// Executes a single Newton iteration:
+//      S_new = S_old + dS, where dS = -J^(-1) * F
+// 1. Evaluates segments on GPU 
+// 2. Builds J and F 
+// 3. Solves J * dS = -F using Eigen::SparseLU 
+// 4. Updates guesses array
+IterationLog compute_newton_step(
+    HDArrays& solver_arrays,            // Modified in place
+    const SystemParams& sys_params, 
+    const IntegratorParams& int_params, 
+    int iteration_number
+) {
+    // 1. Run GPU multiple shooting simulation
+    evaluate_segments_on_gpu(solver_arrays, sys_params, int_params);
+
+    // 2. Build linear system F(S) and J(S)
+    SparseMat J;
+    VectorXd F;
+    build_global_system(solver_arrays, sys_params, J, F);
+
+    // 3. Solve the sparse linear system J * dS = -F using Eigen::SparseLU
+    Eigen::SparseLU<SparseMat> solver;
+    
+    solver.compute(J);      // Computes sparse LU-factorization of J
+    if (solver.info() != Eigen::Success) {
+        printf("Eigen SparseLU failed to factorize the Jacobian!\n");
+        // TODO: Handle error (e.g., return a failed log)
+    }
+
+    VectorXd dS = solver.solve(-F);                         // Newton's method correction
+
+    // 4. Update the guesses using correction from Newton's method 
+    for (int i = 0; i < dS.size(); i++) {
+        solver_arrays.h_node_guesses[i] += dS(i);
+    }
+
+    // 5. Package IterationLog
+    IterationLog log;
+    log.iteration_number = iteration_number;
+    log.max_defect_norm = F.lpNorm<Eigen::Infinity>();      // Maximum absolute error
+    log.step_size_norm = dS.norm();                         // How large our step was
+
+    return log;
+}
+
+
+
+
 
