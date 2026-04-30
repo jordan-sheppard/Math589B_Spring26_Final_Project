@@ -263,4 +263,98 @@ void evaluate_segments_on_gpu(
     solver_arrays.copy_results_to_host();
 }
 
+// Translates the SegmentEvaluations into the global defect vector F and sparse Jacobian J
+void build_global_system(
+    const HDArrays& solver_arrays,
+    const SystemParams& sys_params,
+    SparseMat& J,
+    VectorXd& F
+) {
+    const int NUM_ROWS_PER_SEGMENT = 4;
+    const double FINAL_THETA_DESIRED = 0.0;
+    const double FINAL_PHI_DESIRED = 0.0;
+
+    int N = sys_params.num_shooting_intervals;
+    int system_size = NUM_ROWS_PER_SEGMENT * N;
+
+    // 1. Size the Eigen structures
+    J.resize(system_size, system_size);
+    F.resize(system_size);
+
+    // Eigen highly recommends building sparse matrices using a list of Triplets (row, col, value)
+    std::vector<Eigen::Triplet<double>> triplets;
+    triplets.reserve(N * 20); // Roughly 16 elements for sensitivities M(s), 4 for -I per segment, for N intervals
+
+    // ========================================================================
+    // BLOCK 1: The Continuity Defects (Stitching the segments together)
+    // ========================================================================
+    for (int segment = 0; segment < N - 1; segment++) {
+        int curr_row_offset = segment * NUM_ROWS_PER_SEGMENT;
+        int next_row_offset = (segment + 1) * NUM_ROWS_PER_SEGMENT;
+
+        // The integrated end of current segment
+        const VarState& current_end_state = solver_arrays.h_segment_results[segment].final_state;
+
+        // The guessed start of next segment
+        double next_theta_start_guess = solver_arrays.h_node_guesses[next_row_offset + 0];
+        double next_phi_start_guess   = solver_arrays.h_node_guesses[next_row_offset + 1];
+        double next_l1_start_guess    = solver_arrays.h_node_guesses[next_row_offset + 2];
+        double next_l2_start_guess    = solver_arrays.h_node_guesses[next_row_offset + 3];
+
+        // ------ Segment Defects ------
+        // Defect F_k = segment_end_state - next_segment_start_guess
+        F(curr_row_offset + 0) = current_end_state.theta() - next_theta_start_guess;
+        F(curr_row_offset + 1) = current_end_state.phi()   - next_phi_start_guess;
+        F(curr_row_offset + 2) = current_end_state.l1()    - next_l1_start_guess;
+        F(curr_row_offset + 3) = current_end_state.l2()    - next_l2_start_guess;
+        
+        // ------ Defect/Sensitivity Jacobians ------
+        // Jacobian w.r.t s_k is exactly the sensitivity matrix M_k integrated over the segment
+        for (int r = 0; r < 4; r++) {
+            for (int c = 0; c < 4; c++) {
+                triplets.push_back(Eigen::Triplet<double>(curr_row_offset + r, curr_row_offset + c, current_end_state.M(r, c)));
+            }
+        }
+
+        // Jacobian w.r.t s_{k+1} is exactly -I_4
+        for (int i = 0; i < 4; i++) {
+            triplets.push_back(Eigen::Triplet<double>(curr_row_offset + i, next_row_offset + i, -1.0));
+        }
+    }
+
+    // ========================================================================
+    // BLOCK 2: The Boundary Conditions (The remaining 4 equations)
+    // ========================================================================
+    int bc_row_offset = (N - 1) * NUM_ROWS_PER_SEGMENT;
+
+    // Boundary 1: Initial guess for theta must match provided initial theta
+    double start_theta = solver_arrays.h_node_guesses[0];
+    F(bc_row_offset + 0) = start_theta - sys_params.theta_init;
+    triplets.push_back(Eigen::Triplet<double>(bc_row_offset + 0, 0, 1.0)); // d(F)/d(theta_0) = 1
+
+    // Boundary 2: Initial guess for phi must match provided initial phi 
+    double start_phi = solver_arrays.h_node_guesses[1];
+    F(bc_row_offset + 1) = start_phi - sys_params.phi_init;
+    triplets.push_back(Eigen::Triplet<double>(bc_row_offset + 1, 1, 1.0)); // d(F)/d(phi_0) = 1
+
+    // Boundary 3 & 4: The integrated final state of the VERY LAST segment must hit the target.
+    // NOTE: We assume the target is the exact origin (theta = 0, phi = 0) (can be the LQR stable manifold later...)
+    const VarState& final_end_state = solver_arrays.h_segment_results[N - 1].final_state;
+    
+    F(bc_row_offset + 2) = final_end_state.theta() - FINAL_THETA_DESIRED;
+    F(bc_row_offset + 3) = final_end_state.phi()   - FINAL_PHI_DESIRED;
+
+    // The Jacobian of the final integrated state (theta_N, phi_N) w.r.t the final guess is the final M matrix!
+    for (int c = 0; c < 4; c++) {
+        // Derivative of final integrated theta w.r.t s_{M-1}
+        triplets.push_back(Eigen::Triplet<double>(bc_row_offset + 2, bc_row_offset + c, final_end_state.M(0, c)));
+        
+        // Derivative of final integrated phi w.r.t s_{M-1}
+        triplets.push_back(Eigen::Triplet<double>(bc_row_offset + 3, bc_row_offset + c, final_end_state.M(1, c)));
+    }
+
+    // 3. Compress the triplets with entries into the Sparse Matrix J
+    J.setFromTriplets(triplets.begin(), triplets.end());
+}
+
 

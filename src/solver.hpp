@@ -334,8 +334,7 @@ void evaluate_segments_on_gpu(
 
 // Translates the SegmentEvaluations into the global defect vector F and sparse Jacobian J
 void build_global_system(
-    const std::vector<double>& guesses, 
-    const std::vector<SegmentEvaluation>& segment_results, 
+    const HDArrays& solver_arrays,
     const SystemParams& sys_params,
     SparseMat& J,
     VectorXd& F
@@ -347,14 +346,14 @@ void build_global_system(
 // 3. Solves J * dS = -F using Eigen::SparseLU 
 // 4. Updates guesses array
 IterationLog compute_newton_step(
-    std::vector<double>& node_guesses, // Modified in-place
+    HDArrays& solver_arrays,            // Modified in place
     const SystemParams& sys_params, 
     const IntegratorParams& int_params
 );
 
 // The core loop that calls compute_newton_step until tolerance is met or max_iters is reached
 OptimizationResult solve_multiple_shooting(
-    std::vector<double>& node_guesses, 
+    HDArrays& solver_arrays,            // Modified in place 
     SystemParams sys_params, 
     IntegratorParams int_params, 
     NewtonParams newton_params
