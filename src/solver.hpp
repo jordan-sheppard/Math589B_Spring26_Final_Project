@@ -175,6 +175,8 @@ struct SystemParams {
     double alpha;
     double theta_init;
     double phi_init;
+    double theta_goal;
+    double phi_goal;
     int num_shooting_intervals;
 };
 
@@ -214,6 +216,8 @@ struct Result {
     double optimal_l1_init;
     double optimal_l2_init;
     double optimal_cost;
+    int optimal_theta_wraps = 0;
+    double final_theta_goal = 0.0;
 };
 
 // 8. Output of iterative optimization method looking for a good result, above

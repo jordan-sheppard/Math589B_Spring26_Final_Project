@@ -271,8 +271,8 @@ void build_global_system(
     VectorXd& F
 ) {
     const int NUM_ROWS_PER_SEGMENT = 4;
-    const double FINAL_THETA_DESIRED = 0.0;
-    const double FINAL_PHI_DESIRED = 0.0;
+    const double FINAL_THETA_DESIRED = sys_params.theta_goal;
+    const double FINAL_PHI_DESIRED = sys_params.phi_goal;
 
     int N = sys_params.num_shooting_intervals;
     int system_size = NUM_ROWS_PER_SEGMENT * N;
@@ -479,9 +479,9 @@ std::vector<double> compute_linear_initial_guess(const SystemParams& sys_params)
         // How far along the trajectory are we? (0.0 at start, approaches 1.0 at end)
         double fraction = static_cast<double>(k) / N;
 
-        // Linearly interpolate the states from the initial condition to the origin (0,0)
-        double theta_k = sys_params.theta_init * (1.0 - fraction);
-        double phi_k   = sys_params.phi_init * (1.0 - fraction);
+        // Linearly interpolate the states from the initial condition to the target goal.
+        double theta_k = sys_params.theta_init * (1.0 - fraction) + sys_params.theta_goal * fraction;
+        double phi_k   = sys_params.phi_init   * (1.0 - fraction) + sys_params.phi_goal   * fraction;
 
         // Store in the flat array
         guess[k * 4 + 0] = theta_k;
@@ -513,7 +513,7 @@ OptimizationResult solve_multiple_shooting(
 
 
 Result solve(double target_theta, double target_phi, double alpha) {
-    // Multiple shooting parameteris
+    // Multiple shooting parameters
     const int NUM_SHOOTING_INTERVALS = 20;
 
     // Integration parameters
@@ -526,6 +526,8 @@ Result solve(double target_theta, double target_phi, double alpha) {
 
     // Continuation parameters
     const double MIN_CONTINUATION_STEP_SIZE = 1e-4;
+    const int MAX_THETA_WRAPS = 1;              // Search sheets at -2π, 0, +2π
+    const double TWO_PI = 2.0 * acos(-1.0);
 
     // Package all parameters to run algorithm
     SystemParams sys_params;
@@ -533,6 +535,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
     sys_params.theta_init = target_theta;
     sys_params.phi_init = target_phi;
     sys_params.num_shooting_intervals = NUM_SHOOTING_INTERVALS;
+    sys_params.phi_goal = 0.0;
 
     IntegratorParams int_params;
     int_params.dt = INTEGRATION_DT;
@@ -542,79 +545,100 @@ Result solve(double target_theta, double target_phi, double alpha) {
     newton_params.max_iterations = MAX_NEWTON_ITERATIONS;
     newton_params.tolerance = NEWTON_TOL;
 
-    // 2. 2D Adaptive Homotopy Continuation Setup
-    // Calculate how far the target is from the origin to pick a safe starting point for continuation
-    double target_norm = std::sqrt(target_theta * target_theta + target_phi * target_phi);
-    
-    double current_s = 1.0;             // For "small enough" initial guesses, don't run continuation - just solve from that point
-    if (target_norm > 0.05) {
-        current_s = 0.05 / target_norm; // Start at a safe linear distance (norm approx 0.05)
-    }
+    Result best_result;
+    bool found_best = false;
+    double best_cost = 1e300;
+    int best_wrap = 0;
 
-    double ds = 0.1; // Start by attempting 10% jumps along the path
-    
-    std::printf("Starting Multiple Shooting Solver for Theta = %.6f, Phi = %.6f...\n", sys_params.theta_init, sys_params.phi_init);
+    for (int wrap = -MAX_THETA_WRAPS; wrap <= MAX_THETA_WRAPS; ++wrap) {
+        sys_params.theta_goal = wrap * TWO_PI;
 
-    // 3. Generate and solve the initial seed
-    sys_params.theta_init = current_s * target_theta;
-    sys_params.phi_init   = current_s * target_phi;
-    
-    std::vector<double> active_trajectory = compute_linear_initial_guess(sys_params);
-    OptimizationResult last_success = solve_multiple_shooting(active_trajectory, sys_params, int_params, newton_params);
+        // 2. 2D Adaptive Homotopy Continuation Setup
+        // Calculate how far the target is from the origin to pick a safe starting point for continuation
+        double target_norm = std::sqrt(target_theta * target_theta + target_phi * target_phi);
+        double current_s = 1.0;
+        if (target_norm > 0.05) {
+            current_s = 0.05 / target_norm; // Start at a safe linear distance (norm approx 0.05)
+        }
+        double ds = 0.1; // Start by attempting 10% jumps along the path
 
-    if (!last_success.success) {
-        std::printf("Failed to converge on the initial seed! Check your math.\n");
-        return last_success.r;
-    }
+        std::printf("\n=== Searching sheet wrap=%d, theta_goal=%.6f ===\n", wrap, sys_params.theta_goal);
+        std::printf("Starting Multiple Shooting Solver for Theta = %.6f, Phi = %.6f...\n", sys_params.theta_init, sys_params.phi_init);
 
-    while (current_s < 1.0) {
-        // Walk along path by incrementing s, capped at s=1.0 (the final target)
-        double next_s = std::min(current_s + ds, 1.0);
+        // 3. Generate and solve the initial seed for this goal sheet
+        SystemParams candidate_params = sys_params;
+        candidate_params.theta_init = current_s * target_theta;
+        candidate_params.phi_init   = current_s * target_phi;
 
-        sys_params.theta_init = next_s * target_theta;
-        sys_params.phi_init   = next_s * target_phi;
-        
-        std::printf("\n=== Adaptive Step: s = %.4f (Theta = %.4f, Phi = %.4f) ===\n", 
-                    next_s, sys_params.theta_init, sys_params.phi_init);
-        
-        // Make a copy to protect our last known good state
-        std::vector<double> candidate_trajectory = active_trajectory;
+        std::vector<double> active_trajectory = compute_linear_initial_guess(candidate_params);
+        OptimizationResult last_success = solve_multiple_shooting(active_trajectory, candidate_params, int_params, newton_params);
 
-        // Try to solve
-        OptimizationResult result = solve_multiple_shooting(candidate_trajectory, sys_params, int_params, newton_params);
+        if (!last_success.success) {
+            std::printf("Failed to converge on the initial seed for wrap=%d!\n", wrap);
+            continue;
+        }
 
-        if (result.success) {
-            // STEP ACCEPTED!
-            current_s = next_s;
-            active_trajectory = candidate_trajectory;
-            last_success = result;
+        while (current_s < 1.0) {
+            // Walk along path by incrementing s, capped at s=1.0 (the final target)
+            double next_s = std::min(current_s + ds, 1.0);
 
-            // Speed up if it was easy
-            if (result.num_iterations <= 4) {
-                ds *= 1.5; 
-                std::printf("  -> Fast convergence! Increasing step size to ds = %.5f\n", ds);
+            candidate_params.theta_init = next_s * target_theta;
+            candidate_params.phi_init   = next_s * target_phi;
+            
+            std::printf("\n=== Adaptive Step: s = %.4f (Theta = %.4f, Phi = %.4f) ===\n", 
+                        next_s, candidate_params.theta_init, candidate_params.phi_init);
+            
+            // Make a copy to protect our last known good state
+            std::vector<double> candidate_trajectory = active_trajectory;
+
+            // Try to solve
+            OptimizationResult result = solve_multiple_shooting(candidate_trajectory, candidate_params, int_params, newton_params);
+
+            if (result.success) {
+                // STEP ACCEPTED!
+                current_s = next_s;
+                active_trajectory = candidate_trajectory;
+                last_success = result;
+
+                // Speed up if it was easy
+                if (result.num_iterations <= 4) {
+                    ds *= 1.5; 
+                    std::printf("  -> Fast convergence! Increasing step size to ds = %.5f\n", ds);
+                }
+            } else {
+                // STEP REJECTED!
+                ds *= 0.5; // Cut the step size in half
+                std::printf("  -> Step failed! Shrinking step size to ds = %.5f\n", ds);
+
+                if (ds < MIN_CONTINUATION_STEP_SIZE) {
+                    std::printf("CRITICAL FAILURE: Manifold lost. ds too small.\n");
+                    break;
+                }
             }
-        } else {
-            // STEP REJECTED!
-            ds *= 0.5; // Cut the step size in half
-            std::printf("  -> Step failed! Shrinking step size to ds = %.5f\n", ds);
+        }
 
-            if (ds < MIN_CONTINUATION_STEP_SIZE) {
-                std::printf("CRITICAL FAILURE: Manifold lost. ds too small.\n");
-                break;
+        if (last_success.success) {
+            std::printf("\n--- Finished wrap=%d with cost %.10f ---\n", wrap, last_success.r.optimal_cost);
+            if (!found_best || last_success.r.optimal_cost < best_cost) {
+                found_best = true;
+                best_cost = last_success.r.optimal_cost;
+                best_wrap = wrap;
+                best_result = last_success.r;
+                best_result.optimal_theta_wraps = wrap;
+                best_result.final_theta_goal = sys_params.theta_goal;
             }
         }
     }
 
-    // Display results
-    std::printf("\n>>> SOLVER FINISHED. Final State Reached: Theta = %.4f, Phi = %.4f <<<\n\n", 
-                sys_params.theta_init, sys_params.phi_init);
-                
-    std::printf("Optimal L1(0): %.10f\n", last_success.r.optimal_l1_init);
-    std::printf("Optimal L2(0): %.10f\n", last_success.r.optimal_l2_init);
-    std::printf("Total Cost:    %.10f\n", last_success.r.optimal_cost);
+    if (!found_best) {
+        std::printf("\nERROR: No successful sheet found. Returning last attempted solution.\n");
+        return best_result;
+    }
 
-    return last_success.r;      // Only return best guess from successful continuation step...
+    std::printf("\n>>> BEST SHEET: wrap=%d, theta_goal=%.6f, cost=%.10f <<<\n",
+                best_wrap, best_result.final_theta_goal, best_result.optimal_cost);
+
+    return best_result;
 }
 
 
