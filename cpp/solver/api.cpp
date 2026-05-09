@@ -8,6 +8,10 @@
 #include "cpp/solver/shooting.hpp"
 #include "cpp/solver/types.hpp"
 
+namespace {
+bool debugEnabled() { return std::getenv("PENDULUM_DEBUG") != nullptr; }
+}  // namespace
+
 Result solve(double theta, double phi, double alpha) {
     pendulum::Params p;
     p.alpha = alpha;
@@ -15,6 +19,8 @@ Result solve(double theta, double phi, double alpha) {
     const pendulum::State x0{.theta = theta, .phi = phi};
 
     pendulum::SheetSearchSettings ss;
+    const bool dbg = debugEnabled();
+    ss.debug = dbg;
     ss.shoot.T = 10.0;
     ss.shoot.dt = 1e-3;
     ss.shoot.max_iters = 40;
@@ -23,6 +29,7 @@ Result solve(double theta, double phi, double alpha) {
     ss.shoot.lm_lambda0 = 1e-2;
     ss.shoot.max_delta_norm = 5.0;
     ss.shoot.backtrack_max = 12;
+    ss.shoot.debug = dbg;
 
     // Heuristic: with high initial speed, allow more sheet offsets.
     ss.m_radius_min = 2;

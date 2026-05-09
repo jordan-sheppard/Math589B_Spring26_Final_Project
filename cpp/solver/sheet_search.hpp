@@ -18,6 +18,12 @@ struct SheetSearchSettings {
     // Optional continuation schedule; if nonempty, solveCostatesSingleSheetLMContinuation is used.
     // Values should be increasing horizons (e.g. [2,4,6,8,10]).
     Eigen::VectorXd T_schedule{};
+
+    // Early exit if we find a candidate with residual <= this threshold.
+    double good_enough_resid = 1e-10;
+
+    // If true, print sheet/seed diagnostics to stderr (never stdout).
+    bool debug = false;
 };
 
 struct SheetSearchResult {

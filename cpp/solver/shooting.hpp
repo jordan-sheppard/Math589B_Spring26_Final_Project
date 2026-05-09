@@ -11,7 +11,9 @@ struct ShootSettings {
     double dt = 2e-3;
     int max_iters = 30;
 
-    double fd_eps = 1e-6;         // finite-difference step in costates (absolute)
+    // (Deprecated) Finite-difference step in costates. Kept for experimentation; not used
+    // when variational Jacobians are enabled (default).
+    double fd_eps = 1e-6;
     double lm_lambda0 = 1e-2;     // initial damping
     double lm_lambda_mul = 10.0;  // damping up/down factor
 
@@ -20,6 +22,15 @@ struct ShootSettings {
     // Step safeguard
     double max_delta_norm = 10.0;
     int backtrack_max = 10;
+
+    // Use variational equations to compute dr/dl0 accurately (recommended).
+    bool use_variational_jacobian = true;
+
+    enum class Integrator { RK4, DP5 };
+    Integrator integrator = Integrator::DP5;
+
+    // If true, print iteration diagnostics to stderr (never stdout).
+    bool debug = false;
 };
 
 struct ShootResult {
