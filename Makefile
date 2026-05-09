@@ -22,7 +22,8 @@ CPU_SRC = \
 	cpp/solver/cost.cpp \
 	cpp/solver/dynamics.cpp \
 	cpp/solver/manifold_seed.cpp \
-	cpp/solver/shooting.cpp
+	cpp/solver/shooting.cpp \
+	cpp/solver/sheet_search.cpp
 
 all: cpu
 
