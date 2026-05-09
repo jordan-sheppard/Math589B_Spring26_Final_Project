@@ -43,6 +43,7 @@ SheetSearchResult solveWithSheetSearch(const Params& p, const State& x0, const S
     out.theta0_shifted = x0.theta - twoPi() * static_cast<double>(m_center);
 
     double best_score = std::numeric_limits<double>::infinity();
+    const Eigen::Matrix2d P = stableManifoldSeedP(p.alpha);
 
     // Try center first, then expand outward.
     for (int d = 0; d <= radius; ++d) {
@@ -54,11 +55,15 @@ SheetSearchResult solveWithSheetSearch(const Params& p, const State& x0, const S
             const State x0m{.theta = theta_shifted, .phi = x0.phi};
 
             // Seed l0 ≈ P x0m
-            const Eigen::Matrix2d P = stableManifoldSeedP(p.alpha);
             const Eigen::Vector2d lvec = P * Eigen::Vector2d(x0m.theta, x0m.phi);
             const Costate l0_init{.l1 = lvec(0), .l2 = lvec(1)};
 
-            const ShootResult cand = solveCostatesSingleSheetLM(p, x0m, l0_init, s.shoot);
+            ShootResult cand;
+            if (s.T_schedule.size() > 0) {
+                cand = solveCostatesSingleSheetLMContinuation(p, x0m, l0_init, s.shoot, s.T_schedule);
+            } else {
+                cand = solveCostatesSingleSheetLM(p, x0m, l0_init, s.shoot);
+            }
             const double sc = scoreCandidate(cand);
             if (sc < best_score) {
                 best_score = sc;

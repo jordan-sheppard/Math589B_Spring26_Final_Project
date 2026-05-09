@@ -15,15 +15,23 @@ Result solve(double theta, double phi, double alpha) {
     const pendulum::State x0{.theta = theta, .phi = phi};
 
     pendulum::SheetSearchSettings ss;
-    ss.shoot.T = 8.0;
-    ss.shoot.dt = 2e-3;
-    ss.shoot.max_iters = 35;
-    ss.shoot.tol_resid = 1e-8;
+    ss.shoot.T = 10.0;
+    ss.shoot.dt = 1e-3;
+    ss.shoot.max_iters = 40;
+    ss.shoot.tol_resid = 1e-10;
+    ss.shoot.fd_eps = 1e-5;
+    ss.shoot.lm_lambda0 = 1e-2;
+    ss.shoot.max_delta_norm = 5.0;
+    ss.shoot.backtrack_max = 12;
 
     // Heuristic: with high initial speed, allow more sheet offsets.
-    ss.m_radius_min = 6;
+    ss.m_radius_min = 2;
     ss.m_radius_max = 80;
     ss.m_radius_per_speed = 2.0;
+
+    // Continuation in horizon to improve robustness (especially for phi != 0).
+    ss.T_schedule.resize(4);
+    ss.T_schedule << 2.0, 4.0, 6.0, 8.0;
 
     const pendulum::SheetSearchResult sol = pendulum::solveWithSheetSearch(p, x0, ss);
 

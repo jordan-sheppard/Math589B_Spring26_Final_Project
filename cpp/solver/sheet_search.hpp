@@ -14,6 +14,10 @@ struct SheetSearchSettings {
     double m_radius_per_speed = 2.0;
 
     ShootSettings shoot{};
+
+    // Optional continuation schedule; if nonempty, solveCostatesSingleSheetLMContinuation is used.
+    // Values should be increasing horizons (e.g. [2,4,6,8,10]).
+    Eigen::VectorXd T_schedule{};
 };
 
 struct SheetSearchResult {
