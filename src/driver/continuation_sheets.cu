@@ -51,7 +51,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
 
         // std::printf("\n=== Searching sheet wrap=%d, theta_goal=%.6f ===\n", wrap, sys_params.theta_goal);
         // std::printf("Starting Multiple Shooting Solver for Theta = %.6f, Phi = %.6f...\n",
-                    sys_params.theta_init, sys_params.phi_init);
+        //            sys_params.theta_init, sys_params.phi_init);
 
         SystemParams candidate_params = sys_params;
         candidate_params.theta_init = current_s * target_theta;
@@ -73,7 +73,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
             candidate_params.phi_init = next_s * target_phi;
 
             // std::printf("\n=== Adaptive Step: s = %.4f (Theta = %.4f, Phi = %.4f) ===\n", next_s,
-                        candidate_params.theta_init, candidate_params.phi_init);
+            //            candidate_params.theta_init, candidate_params.phi_init);
 
             std::vector<double> candidate_trajectory = active_trajectory;
 
@@ -119,7 +119,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
     }
 
     // std::printf("\n>>> BEST SHEET: wrap=%d, theta_goal=%.6f, cost=%.10f <<<\n", best_wrap,
-                best_result.final_theta_goal, best_result.optimal_cost);
+    //            best_result.final_theta_goal, best_result.optimal_cost);
 
     return best_result;
 }
