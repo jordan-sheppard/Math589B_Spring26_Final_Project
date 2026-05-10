@@ -1,8 +1,10 @@
 #include "shooting/newton_iteration.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <vector>
 
 #include "core/solver_debug.hpp"
@@ -16,6 +18,12 @@
 #include "core/solver_host_types.hpp"
 #include "shooting/defect_jacobian_host.hpp"
 #include "shooting/gpu_eval_segments.hpp"
+
+namespace {
+// Agent NDJSON log (session 976d44): opened relative to process cwd — run solver from repo dir on Colab
+// so `math589_debug_976d44.log` lands next to `./solver`.
+constexpr const char *kMath589AgentLog976d44 = "math589_debug_976d44.log";
+} // namespace
 
 IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sys_params,
                                  const IntegratorParams &int_params, const NewtonParams &newton_params,
@@ -58,7 +66,33 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
 
     const int n = static_cast<int>(z_backup.size());
     const double rel_req = newton_params.lm_relative_reduction_min;
-    const double accept_threshold = r_norm_start * (1.0 - rel_req);
+    // When ‖r‖∞ is only tens-hundreds × tolerance, fixed relative cuts (e.g. 1e-5) demand
+    // sub-representable reductions and every LM try fails (wrap=0: stall ~1e-4 then reject).
+    const double tol = std::max(newton_params.tolerance, 1e-18);
+    const double rn = std::fabs(r_norm_start);
+    double rel_scale = 1.0;
+    if (rn > 0.0) {
+        rel_scale = rn / (200.0 * tol);
+        rel_scale = std::min(1.0, rel_scale);
+        rel_scale = std::max(0.03, rel_scale);
+    }
+    const double rel_eff = rel_req * rel_scale;
+    const double accept_threshold = r_norm_start * (1.0 - rel_eff);
+
+    // #region agent log
+    {
+        auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::system_clock::now().time_since_epoch())
+                      .count();
+        std::ofstream lf(kMath589AgentLog976d44, std::ios::app);
+        if (lf)
+            lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H1\",\"location\":\"newton_iteration.cu:"
+                  "LM_gate\",\"message\":\"rel_scaling\",\"timestamp\":" << ts
+               << ",\"data\":{\"rn\":" << rn << ",\"tol\":" << tol << ",\"rel_req\":" << rel_req
+               << ",\"rel_scale\":" << rel_scale << ",\"rel_eff\":" << rel_eff
+               << ",\"accept_thr\":" << accept_threshold << "}}\n";
+    }
+    // #endregion
 
     for (int sub = 0; sub < newton_params.lm_max_subiterations; ++sub) {
         SparseMat A = JtJ;
@@ -145,8 +179,36 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
                              "[MATH589][LM] ACCEPTED |r|_inf %.6e -> %.6e step_norm=%.6e lm_mu_out=%.6e\n",
                              r_norm_start, best_residual, log.step_size_norm, lm_mu);
             }
+            // #region agent log
+            {
+                auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::system_clock::now().time_since_epoch())
+                              .count();
+                std::ofstream lf(kMath589AgentLog976d44, std::ios::app);
+                if (lf)
+                    lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H2\",\"location\":\"newton_iteration."
+                          "cu:accept\",\"message\":\"lm_accepted\",\"timestamp\":" << ts
+                       << ",\"data\":{\"sub\":" << sub << ",\"r_before\":" << r_norm_start
+                       << ",\"r_after\":" << best_residual << ",\"accept_thr\":" << accept_threshold
+                       << ",\"lm_mu_out\":" << lm_mu << "}}\n";
+            }
+            // #endregion
             return log;
         }
+
+        // #region agent log
+        {
+            auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch())
+                          .count();
+            std::ofstream lf(kMath589AgentLog976d44, std::ios::app);
+            if (lf)
+                lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H2\",\"location\":\"newton_iteration.cu:"
+                      "reject_sub\",\"message\":\"lm_subiter_rejected\",\"timestamp\":" << ts
+                   << ",\"data\":{\"sub\":" << sub << ",\"best_r\":" << best_residual
+                   << ",\"accept_thr\":" << accept_threshold << ",\"mu\":" << mu << "}}\n";
+        }
+        // #endregion
 
         solver_arrays.h_node_guesses = z_backup;
         mu = std::min(newton_params.lm_mu_max, mu * newton_params.lm_mu_increase);
@@ -159,5 +221,17 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
                      "[MATH589][LM] FAILED all damping tries -> leave |r|_inf=%.6e lm_mu(now)=%.6e\n",
                      r_norm_start, mu);
     }
+    // #region agent log
+    {
+        auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::system_clock::now().time_since_epoch())
+                      .count();
+        std::ofstream lf(kMath589AgentLog976d44, std::ios::app);
+        if (lf)
+            lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H3\",\"location\":\"newton_iteration.cu:"
+                  "fail_all\",\"message\":\"lm_failed_all_sub\",\"timestamp\":" << ts
+               << ",\"data\":{\"r_unchanged\":" << r_norm_start << ",\"mu_final\":" << mu << "}}\n";
+    }
+    // #endregion
     return log;
 }
