@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <set>
 #include <vector>
 
 #include "core/solver_types.cuh"
@@ -12,11 +13,10 @@ Result solve(double target_theta, double target_phi, double alpha) {
     const double INTEGRATION_DT = 0.025;
     const int NUM_INTEGRATION_STEPS = 10;
 
-    const int MAX_NEWTON_ITERATIONS = 15;
+    const int MAX_NEWTON_ITERATIONS = 25;
     const double NEWTON_TOL = 1e-6;
 
     const double MIN_CONTINUATION_STEP_SIZE = 1e-4;
-    const int MAX_THETA_WRAPS = 1;
     const double TWO_PI = 2.0 * acos(-1.0);
 
     SystemParams sys_params;
@@ -29,18 +29,37 @@ Result solve(double target_theta, double target_phi, double alpha) {
     IntegratorParams int_params;
     int_params.dt = INTEGRATION_DT;
     int_params.num_steps = NUM_INTEGRATION_STEPS;
+    int_params.use_dp5 = false;
 
     NewtonParams newton_params;
     newton_params.max_iterations = MAX_NEWTON_ITERATIONS;
     newton_params.tolerance = NEWTON_TOL;
+    newton_params.lm_mu_initial = 1e-4;
+    newton_params.lm_mu_increase = 10.0;
+    newton_params.lm_mu_decrease = 0.5;
+    newton_params.lm_mu_min = 1e-14;
+    newton_params.lm_mu_max = 1e10;
+    newton_params.lm_max_subiterations = 15;
+    newton_params.max_delta_norm = 5e2;
+    newton_params.backtrack_max = 10;
 
     Result best_result;
     bool found_best = false;
     double best_cost = 1e300;
     int best_wrap = 0;
 
-    for (int wrap = -MAX_THETA_WRAPS; wrap <= MAX_THETA_WRAPS; ++wrap) {
-        sys_params.theta_goal = wrap * TWO_PI;
+    const int center_wrap = (int)std::lround(target_theta / TWO_PI);
+    const int span =
+        std::max(3, std::min(16, 3 + (int)std::ceil(std::abs(target_phi) * 0.45)));
+    std::set<int> wrap_candidates;
+    wrap_candidates.insert(center_wrap);
+    for (int d = 1; d <= span; ++d) {
+        wrap_candidates.insert(center_wrap + d);
+        wrap_candidates.insert(center_wrap - d);
+    }
+
+    for (int wrap : wrap_candidates) {
+        sys_params.theta_goal = static_cast<double>(wrap) * TWO_PI;
 
         double target_norm = std::sqrt(target_theta * target_theta + target_phi * target_phi);
         double current_s = 1.0;
@@ -48,10 +67,6 @@ Result solve(double target_theta, double target_phi, double alpha) {
             current_s = 0.05 / target_norm;
         }
         double ds = 0.1;
-
-        // std::printf("\n=== Searching sheet wrap=%d, theta_goal=%.6f ===\n", wrap, sys_params.theta_goal);
-        // std::printf("Starting Multiple Shooting Solver for Theta = %.6f, Phi = %.6f...\n",
-        //            sys_params.theta_init, sys_params.phi_init);
 
         SystemParams candidate_params = sys_params;
         candidate_params.theta_init = current_s * target_theta;
@@ -62,7 +77,6 @@ Result solve(double target_theta, double target_phi, double alpha) {
             solve_multiple_shooting(active_trajectory, candidate_params, int_params, newton_params);
 
         if (!last_success.success) {
-            // std::printf("Failed to converge on the initial seed for wrap=%d!\n", wrap);
             continue;
         }
 
@@ -71,9 +85,6 @@ Result solve(double target_theta, double target_phi, double alpha) {
 
             candidate_params.theta_init = next_s * target_theta;
             candidate_params.phi_init = next_s * target_phi;
-
-            // std::printf("\n=== Adaptive Step: s = %.4f (Theta = %.4f, Phi = %.4f) ===\n", next_s,
-            //            candidate_params.theta_init, candidate_params.phi_init);
 
             std::vector<double> candidate_trajectory = active_trajectory;
 
@@ -87,21 +98,28 @@ Result solve(double target_theta, double target_phi, double alpha) {
 
                 if (result.num_iterations <= 4) {
                     ds *= 1.5;
-                    // std::printf("  -> Fast convergence! Increasing step size to ds = %.5f\n", ds);
                 }
             } else {
                 ds *= 0.5;
-                // std::printf("  -> Step failed! Shrinking step size to ds = %.5f\n", ds);
 
                 if (ds < MIN_CONTINUATION_STEP_SIZE) {
-                    // std::printf("CRITICAL FAILURE: Manifold lost. ds too small.\n");
                     break;
                 }
             }
         }
 
         if (last_success.success) {
-            // std::printf("\n--- Finished wrap=%d with cost %.10f ---\n", wrap, last_success.r.optimal_cost);
+            IntegratorParams polish_params = int_params;
+            polish_params.num_steps = int_params.num_steps + 6;
+
+            std::vector<double> polish_traj = active_trajectory;
+            OptimizationResult polish_result =
+                solve_multiple_shooting(polish_traj, candidate_params, polish_params, newton_params);
+            if (polish_result.success) {
+                last_success = polish_result;
+                active_trajectory = polish_traj;
+            }
+
             if (!found_best || last_success.r.optimal_cost < best_cost) {
                 found_best = true;
                 best_cost = last_success.r.optimal_cost;
@@ -114,12 +132,8 @@ Result solve(double target_theta, double target_phi, double alpha) {
     }
 
     if (!found_best) {
-        // std::printf("\nERROR: No successful sheet found. Returning last attempted solution.\n");
         return best_result;
     }
-
-    // std::printf("\n>>> BEST SHEET: wrap=%d, theta_goal=%.6f, cost=%.10f <<<\n", best_wrap,
-    //            best_result.final_theta_goal, best_result.optimal_cost);
 
     return best_result;
 }

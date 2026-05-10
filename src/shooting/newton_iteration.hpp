@@ -4,4 +4,5 @@
 #include "core/solver_types.cuh"
 
 IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sys_params,
-                                 const IntegratorParams &int_params);
+                                 const IntegratorParams &int_params, const NewtonParams &newton_params,
+                                 double &lm_mu);

@@ -113,11 +113,23 @@ struct SystemParams {
 struct IntegratorParams {
     double dt;
     int num_steps;
+    /// If true, use 5th-order Dormand–Prince (fixed step); else classical RK4.
+    bool use_dp5 = false;
 };
 
 struct NewtonParams {
     int max_iterations;
     double tolerance;
+    /// Levenberg–Marquardt damping (updated during the solve).
+    double lm_mu_initial = 1e-3;
+    double lm_mu_increase = 10.0;
+    double lm_mu_decrease = 0.5;
+    double lm_mu_min = 1e-12;
+    double lm_mu_max = 1e12;
+    int lm_max_subiterations = 12;
+    /// Cap on ‖δ‖ before backtracking.
+    double max_delta_norm = 1e2;
+    int backtrack_max = 8;
 };
 
 struct SegmentEvaluation {
