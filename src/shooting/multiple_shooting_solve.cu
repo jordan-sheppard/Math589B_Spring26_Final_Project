@@ -1,8 +1,10 @@
 #include "shooting/multiple_shooting_solve.hpp"
 
+#include <cstdio>
 #include <vector>
 
 #include "core/host_buffers.hpp"
+#include "core/solver_debug.hpp"
 #include "core/manifold_seed.hpp"
 #include "shooting/newton_iteration.hpp"
 
@@ -20,25 +22,66 @@ OptimizationResult solve_multiple_shooting(std::vector<double> &flat_node_guesse
 
     double lm_mu = newton_params.lm_mu_initial;
 
+    const bool dbg = math589_solver_debug_enabled();
+    if (dbg) {
+        std::fprintf(stderr,
+                   "[MATH589][MS] start N_seg=%d alpha=%.6g dt=%.6g steps=%d tol=%.3e "
+                   "theta_init=%.6g phi_init=%.6g theta_goal=%.6g phi_goal=%.6g lm_mu=%.3e "
+                   "max_newton=%d\n",
+                   sys_params.num_shooting_intervals, sys_params.alpha, int_params.dt,
+                   int_params.num_steps, newton_params.tolerance, sys_params.theta_init,
+                   sys_params.phi_init, sys_params.theta_goal, sys_params.phi_goal, lm_mu,
+                   newton_params.max_iterations);
+    }
+
     while (iteration < newton_params.max_iterations) {
 
         IterationLog log =
             compute_newton_step(solver_arrays, sys_params, int_params, newton_params, lm_mu);
 
         if (!log.success) {
-            converged = false;
-            current_error = 1e9;
-            break;
+            // One failed LM Armijo/subproblem is common; tighten damping and keep iterating rather
+            // than aborting the whole multiple-shooting solve immediately.
+            lm_mu = std::min(newton_params.lm_mu_max,
+                             std::max(newton_params.lm_mu_min, lm_mu * newton_params.lm_mu_increase));
+            if (dbg) {
+                std::fprintf(stderr,
+                             "[MATH589][MS] iter=%d LM_SUBPROBLEM_REJECTED bumped_lm_mu=%.6e "
+                             "(max|F| unchanged this outer step)\n",
+                             iteration, lm_mu);
+            }
+            iteration++;
+            if (iteration >= newton_params.max_iterations) {
+                converged = false;
+                current_error = 1e9;
+                break;
+            }
+            continue;
         }
 
         current_error = log.max_defect_norm;
 
+        if (dbg) {
+            std::fprintf(stderr,
+                         "[MATH589][MS] iter=%d ok=1 step_norm=%.6e max|F|=%.6e lm_mu(now)=%.6e\n",
+                         iteration, log.step_size_norm, current_error, lm_mu);
+        }
+
         if (current_error < newton_params.tolerance) {
             converged = true;
+            if (dbg) {
+                std::fprintf(stderr, "[MATH589][MS] CONVERGED iter=%d max|F|=%.6e < tol\n", iteration,
+                             current_error);
+            }
             break;
         }
 
         iteration++;
+    }
+
+    if (dbg && !converged) {
+        std::fprintf(stderr, "[MATH589][MS] END_NOT_CONVERGED iters_used=%d last_max|F|=%.6e\n",
+                     iteration, current_error);
     }
 
     OptimizationResult final_result;
@@ -61,6 +104,15 @@ OptimizationResult solve_multiple_shooting(std::vector<double> &flat_node_guesse
 
     if (converged) {
         flat_node_guesses = solver_arrays.h_node_guesses;
+    }
+
+    if (dbg) {
+        std::fprintf(stderr,
+                     "[MATH589][MS] summary converged=%d l1(0)=%.10f l2(0)=%.10f cost=%.10f "
+                     "iters=%d final_err=%.6e\n",
+                     converged ? 1 : 0, final_result.r.optimal_l1_init,
+                     final_result.r.optimal_l2_init, final_result.r.optimal_cost, iteration,
+                     final_result.final_error);
     }
 
     return final_result;

@@ -4,6 +4,7 @@
 #include <set>
 #include <vector>
 
+#include "core/solver_debug.hpp"
 #include "core/solver_types.cuh"
 #include "shooting/multiple_shooting_solve.hpp"
 
@@ -58,8 +59,22 @@ Result solve(double target_theta, double target_phi, double alpha) {
         wrap_candidates.insert(center_wrap - d);
     }
 
+    const bool dbg_drv = math589_solver_debug_enabled();
+    if (dbg_drv) {
+        std::fprintf(stderr,
+                     "[MATH589][DRIVER] target theta=%.10g phi=%.10g alpha=%.10g "
+                     "center_wrap=%d span=%zu candidate_wraps_total=%zu\n",
+                     target_theta, target_phi, alpha, center_wrap, (size_t)span,
+                     wrap_candidates.size());
+    }
+
     for (int wrap : wrap_candidates) {
         sys_params.theta_goal = static_cast<double>(wrap) * TWO_PI;
+
+        if (dbg_drv) {
+            std::fprintf(stderr, "[MATH589][DRIVER] --- sheet wrap=%d theta_goal=%.10g ---\n", wrap,
+                         sys_params.theta_goal);
+        }
 
         double target_norm = std::sqrt(target_theta * target_theta + target_phi * target_phi);
         double current_s = 1.0;
@@ -73,10 +88,20 @@ Result solve(double target_theta, double target_phi, double alpha) {
         candidate_params.phi_init = current_s * target_phi;
 
         std::vector<double> active_trajectory = compute_linear_initial_guess(candidate_params);
+        if (dbg_drv) {
+            std::fprintf(stderr,
+                         "[MATH589][DRIVER] homotopy initial s=%.6g theta_ic=%.6g phi_ic=%.6g\n",
+                         current_s, candidate_params.theta_init, candidate_params.phi_init);
+        }
+
         OptimizationResult last_success =
             solve_multiple_shooting(active_trajectory, candidate_params, int_params, newton_params);
 
         if (!last_success.success) {
+            if (dbg_drv) {
+                std::fprintf(stderr,
+                             "[MATH589][DRIVER] initial MS solve FAILED wrap=%d (skip sheet)\n", wrap);
+            }
             continue;
         }
 
@@ -87,6 +112,13 @@ Result solve(double target_theta, double target_phi, double alpha) {
             candidate_params.phi_init = next_s * target_phi;
 
             std::vector<double> candidate_trajectory = active_trajectory;
+
+            if (dbg_drv) {
+                std::fprintf(stderr,
+                             "[MATH589][DRIVER] homotopy try next_s=%.6g theta_ic=%.6g phi_ic=%.6g "
+                             "ds=%.6g\n",
+                             next_s, candidate_params.theta_init, candidate_params.phi_init, ds);
+            }
 
             OptimizationResult result =
                 solve_multiple_shooting(candidate_trajectory, candidate_params, int_params, newton_params);
@@ -102,6 +134,13 @@ Result solve(double target_theta, double target_phi, double alpha) {
             } else {
                 ds *= 0.5;
 
+                if (dbg_drv) {
+                    std::fprintf(stderr,
+                                 "[MATH589][DRIVER] homotopy step REJECT shrink ds=%.6g "
+                                 "(MS did not converge at this next_s)\n",
+                                 ds);
+                }
+
                 if (ds < MIN_CONTINUATION_STEP_SIZE) {
                     break;
                 }
@@ -113,6 +152,11 @@ Result solve(double target_theta, double target_phi, double alpha) {
             polish_params.num_steps = int_params.num_steps + 6;
 
             std::vector<double> polish_traj = active_trajectory;
+            if (dbg_drv) {
+                std::fprintf(stderr,
+                             "[MATH589][DRIVER] polish segments steps %d -> %d\n",
+                             int_params.num_steps, polish_params.num_steps);
+            }
             OptimizationResult polish_result =
                 solve_multiple_shooting(polish_traj, candidate_params, polish_params, newton_params);
             if (polish_result.success) {
@@ -128,11 +172,28 @@ Result solve(double target_theta, double target_phi, double alpha) {
                 best_result.optimal_theta_wraps = wrap;
                 best_result.final_theta_goal = sys_params.theta_goal;
             }
+            if (dbg_drv) {
+                std::fprintf(stderr,
+                             "[MATH589][DRIVER] sheet wrap=%d finished ok best_cost_so_far=%.10g "
+                             "best_wrap_track=%d\n",
+                             wrap, best_cost, best_wrap);
+            }
         }
     }
 
     if (!found_best) {
+        if (dbg_drv) {
+            std::fprintf(stderr,
+                         "[MATH589][DRIVER] solve() returning DEFAULT (found_best=false) -> zeros\n");
+        }
         return best_result;
+    }
+
+    if (dbg_drv) {
+        std::fprintf(stderr,
+                     "[MATH589][DRIVER] BEST wrap=%d final_theta_goal=%.10g l1=%.10f l2=%.10f cost=%.10f\n",
+                     best_wrap, best_result.final_theta_goal, best_result.optimal_l1_init,
+                     best_result.optimal_l2_init, best_result.optimal_cost);
     }
 
     return best_result;
