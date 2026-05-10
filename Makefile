@@ -43,11 +43,11 @@ CUDA_SRC = \
 	src/host/shooting_host.cpp \
 	src/host/sheet_search.cpp
 
-# std::thread in sheet_search.cc needs -pthread on typical Linux toolchains.
-CUDA_LDFLAGS ?= -pthread
+# std::thread (sheet_search) — pass pthread to the host toolchain; nvcc rejects bare -pthread.
+CUDA_HOST_PTHREAD ?= -Xcompiler -pthread
 
 cuda:
-	$(NVCC) $(NVCCFLAGS) $(EIGEN_CFLAGS) $(CUDA_SRC) -o $(TARGET) $(CUDA_LDFLAGS)
+	$(NVCC) $(NVCCFLAGS) $(CUDA_HOST_PTHREAD) $(EIGEN_CFLAGS) $(CUDA_SRC) -o $(TARGET)
 
 SMOKE_TARGET = smoke
 smoke:
