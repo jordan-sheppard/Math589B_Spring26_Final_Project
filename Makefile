@@ -30,13 +30,20 @@ all: cpu
 cpu:
 	$(CXX) $(CXXFLAGS) -Isrc -I. $(EIGEN_CFLAGS) $(CPU_SRC) -o $(TARGET)
 
-# CUDA build (for CUDA machines only)
+# CUDA build (for CUDA machines only): ODE / sensitivities are CUDA-compiled
+# (__host__/__device__) with no Eigen on device; Eigen is only used in
+# src/host/manifold_seed.cpp for the stable-manifold seed P.
 NVCC ?= nvcc
-NVCCFLAGS ?= -O2
-CUDA_SRC = src/main.cu src/solver.cu
+NVCCFLAGS ?= -O2 -std=c++20 -Isrc -I.
+CUDA_SRC = \
+	src/main.cu \
+	src/solver.cu \
+	src/host/manifold_seed.cpp \
+	src/host/shooting_host.cpp \
+	src/host/sheet_search.cpp
 
 cuda:
-	$(NVCC) $(NVCCFLAGS) $(CUDA_SRC) -o $(TARGET)
+	$(NVCC) $(NVCCFLAGS) $(EIGEN_CFLAGS) $(CUDA_SRC) -o $(TARGET)
 
 SMOKE_TARGET = smoke
 smoke:
