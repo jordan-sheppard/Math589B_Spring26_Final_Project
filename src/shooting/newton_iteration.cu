@@ -25,7 +25,7 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
 
     solver.compute(J);
     if (solver.info() != Eigen::Success) {
-        printf("Eigen SparseLU failed to factorize the Jacobian!\n");
+        // printf("Eigen SparseLU failed to factorize the Jacobian!\n");
         log.success = false;
         return log;
     }
