@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #define EIGEN_NO_CUDA
 #define EIGEN_DONT_VECTORIZE
@@ -72,7 +73,7 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
         bool improved = false;
         double eta_best = 1.0;
         double best_residual = r_norm_start;
-        VectorXd trial_best = z_backup;
+        std::vector<double> trial_best = z_backup;
 
         double eta = 1.0;
         for (int bt = 0; bt <= newton_params.backtrack_max; ++bt) {
