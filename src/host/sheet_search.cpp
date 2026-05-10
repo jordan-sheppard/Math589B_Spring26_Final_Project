@@ -1,9 +1,13 @@
 #include "sheet_search.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #include "manifold_seed.hpp"
 
@@ -87,35 +91,86 @@ SheetSearchResultHost solve_with_sheet_search(const Params& p, const State& x0, 
             const int seeds_n = hard ? static_cast<int>(sizeof(seeds_hard) / sizeof(seeds_hard[0]))
                                      : static_cast<int>(sizeof(seeds_easy) / sizeof(seeds_easy[0]));
 
-            for (int si = 0; si < seeds_n; ++si) {
-                const Costate& seed = seeds[si];
-                if (s.debug && hard) {
-                    std::fprintf(stderr, "[sheet]  seed[%d]=(%.6g,%.6g)\n", si, seed.l1, seed.l2);
-                }
+            const bool run_parallel = s.parallel_seeds && !s.debug && seeds_n > 1;
 
-                ShootResultHost cand;
-                if (!s.T_schedule.empty()) {
-                    cand = solve_costates_single_sheet_lm_continuation(p, x0m, seed, s.shoot, s.T_schedule, P);
-                } else {
-                    cand = solve_costates_single_sheet_lm(p, x0m, seed, s.shoot, P);
-                }
-
-                const double sc = score_candidate(cand);
-                if (sc < best_score) {
-                    best_score = sc;
-                    out.best = cand;
-                    out.best_m = m;
-                    out.theta0_shifted = theta_shifted;
-                }
-
-                if (out.best.resid_dim > 0 && resid_inf(out.best.resid_dim, out.best.resid) <= s.good_enough_resid) {
-                    if (s.debug) {
-                        std::fprintf(
-                            stderr,
-                            "[sheet] early-exit m=%d rinf=%.3e\n",
-                            out.best_m,
-                            resid_inf(out.best.resid_dim, out.best.resid));
+            if (!run_parallel) {
+                for (int si = 0; si < seeds_n; ++si) {
+                    const Costate& seed = seeds[si];
+                    if (s.debug && hard) {
+                        std::fprintf(stderr, "[sheet]  seed[%d]=(%.6g,%.6g)\n", si, seed.l1, seed.l2);
                     }
+
+                    ShootResultHost cand;
+                    if (!s.T_schedule.empty()) {
+                        cand = solve_costates_single_sheet_lm_continuation(p, x0m, seed, s.shoot, s.T_schedule, P);
+                    } else {
+                        cand = solve_costates_single_sheet_lm(p, x0m, seed, s.shoot, P);
+                    }
+
+                    const double sc = score_candidate(cand);
+                    if (sc < best_score) {
+                        best_score = sc;
+                        out.best = cand;
+                        out.best_m = m;
+                        out.theta0_shifted = theta_shifted;
+                    }
+
+                    if (out.best.resid_dim > 0 &&
+                        resid_inf(out.best.resid_dim, out.best.resid) <= s.good_enough_resid) {
+                        if (s.debug) {
+                            std::fprintf(
+                                stderr,
+                                "[sheet] early-exit m=%d rinf=%.3e\n",
+                                out.best_m,
+                                resid_inf(out.best.resid_dim, out.best.resid));
+                        }
+                        return out;
+                    }
+                }
+            } else {
+                std::vector<Costate> seed_vec(seeds, seeds + seeds_n);
+                std::mutex best_mu;
+                std::atomic<bool> good_stop{false};
+
+                std::vector<std::thread> workers;
+                workers.reserve(static_cast<std::size_t>(seeds_n));
+                for (int si = 0; si < seeds_n; ++si) {
+                    workers.emplace_back([&, si]() {
+                        if (good_stop.load(std::memory_order_relaxed)) {
+                            return;
+                        }
+                        const Costate& seed = seed_vec[static_cast<std::size_t>(si)];
+
+                        ShootResultHost cand;
+                        if (!s.T_schedule.empty()) {
+                            cand =
+                                solve_costates_single_sheet_lm_continuation(p, x0m, seed, s.shoot, s.T_schedule, P);
+                        } else {
+                            cand = solve_costates_single_sheet_lm(p, x0m, seed, s.shoot, P);
+                        }
+
+                        const double sc = score_candidate(cand);
+                        {
+                            std::lock_guard<std::mutex> lock(best_mu);
+                            if (sc < best_score) {
+                                best_score = sc;
+                                out.best = cand;
+                                out.best_m = m;
+                                out.theta0_shifted = theta_shifted;
+                            }
+                            if (out.best.resid_dim > 0 &&
+                                resid_inf(out.best.resid_dim, out.best.resid) <= s.good_enough_resid) {
+                                good_stop.store(true, std::memory_order_relaxed);
+                            }
+                        }
+                    });
+                }
+                for (auto& t : workers) {
+                    t.join();
+                }
+
+                if (out.best.resid_dim > 0 &&
+                    resid_inf(out.best.resid_dim, out.best.resid) <= s.good_enough_resid) {
                     return out;
                 }
             }

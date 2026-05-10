@@ -14,6 +14,10 @@ struct SheetSearchSettingsHost {
     std::vector<double> T_schedule{};
     double good_enough_resid = 1e-10;
     bool debug = false;
+
+    // When true and seed count > 1, run each initial costate seed on a separate host thread
+    // (each uses its own CUDA stream + device buffers). Ignored when debug is true.
+    bool parallel_seeds = true;
 };
 
 struct SheetSearchResultHost {

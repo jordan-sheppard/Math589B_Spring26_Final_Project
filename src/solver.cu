@@ -1,5 +1,6 @@
 #include "solver.hpp"
 
+#include <cuda_runtime.h>
 #include <cstdlib>
 
 #include "host/sheet_search.hpp"
@@ -9,6 +10,8 @@ bool debug_enabled() { return std::getenv("PENDULUM_DEBUG") != nullptr; }
 }  // namespace
 
 Result solve(double theta, double phi, double alpha) {
+    cudaSetDevice(0);
+
     pendulum::Params p;
     p.alpha = alpha;
 

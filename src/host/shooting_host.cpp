@@ -7,8 +7,9 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <vector>
 
-#include "../cuda/forward_sim.cuh"
+#include "../cuda/forward_gpu.hpp"
 
 namespace pendulum {
 
@@ -75,19 +76,22 @@ void finite_diff_jacobian(
     const int m = use_manifold ? 4 : 2;
     *m_out = m;
 
-    for (int j = 0; j < 2; ++j) {
-        Costate lp = l0;
-        Costate lm = l0;
-        if (j == 0) {
-            lp.l1 += eps;
-            lm.l1 -= eps;
-        } else {
-            lp.l2 += eps;
-            lm.l2 -= eps;
-        }
-        const ForwardSimOut outp = simulate_forward(p, x0, lp, T, dt, integrator);
-        const ForwardSimOut outm = simulate_forward(p, x0, lm, T, dt, integrator);
+    Costate lp0 = l0;
+    Costate lm0 = l0;
+    lp0.l1 += eps;
+    lm0.l1 -= eps;
+    Costate lp1 = l0;
+    Costate lm1 = l0;
+    lp1.l2 += eps;
+    lm1.l2 -= eps;
 
+    const Costate seeds[4] = {lp0, lm0, lp1, lm1};
+    ForwardSimOut outs[4];
+    forward_batch_cuda(p, x0, seeds, 4, T, dt, integrator, outs);
+
+    for (int j = 0; j < 2; ++j) {
+        const ForwardSimOut& outp = outs[2 * j + 0];
+        const ForwardSimOut& outm = outs[2 * j + 1];
         double rp[4], rm[4];
         int dp = 0, dm = 0;
         terminal_residual(outp, P, use_manifold, rp, &dp);
@@ -159,7 +163,8 @@ ShootResultHost solve_costates_single_sheet_lm(
     Costate l = l0_init;
     double lambda = s.lm_lambda0;
 
-    ForwardSimOut out0 = simulate_forward(p, x0, l, s.T, s.dt, s.integrator);
+    ForwardSimOut out0{};
+    forward_one_cuda(p, x0, l, s.T, s.dt, s.integrator, &out0);
 
     double r[4];
     int dim = 0;
@@ -249,13 +254,18 @@ ShootResultHost solve_costates_single_sheet_lm(
         double cost_acc = cost;
         double accepted_step = 0.0;
 
-        double step = 1.0;
-        for (int bt = 0; bt <= s.backtrack_max; ++bt) {
-            Costate l_trial = l;
-            l_trial.l1 += step * delta[0];
-            l_trial.l2 += step * delta[1];
+        const int ntrials = s.backtrack_max + 1;
+        std::vector<Costate> trials(static_cast<std::size_t>(ntrials));
+        std::vector<ForwardSimOut> trial_outs(static_cast<std::size_t>(ntrials));
+        for (int bt = 0; bt < ntrials; ++bt) {
+            const double mult = std::ldexp(1.0, -bt);
+            trials[static_cast<std::size_t>(bt)].l1 = l.l1 + mult * delta[0];
+            trials[static_cast<std::size_t>(bt)].l2 = l.l2 + mult * delta[1];
+        }
+        forward_batch_cuda(p, x0, trials.data(), ntrials, s.T, s.dt, s.integrator, trial_outs.data());
 
-            const ForwardSimOut out_trial = simulate_forward(p, x0, l_trial, s.T, s.dt, s.integrator);
+        for (int bt = 0; bt < ntrials; ++bt) {
+            const ForwardSimOut& out_trial = trial_outs[static_cast<std::size_t>(bt)];
             double r_trial[4];
             int dtrial = 0;
             terminal_residual(out_trial, P, use_manifold, r_trial, &dtrial);
@@ -263,17 +273,17 @@ ShootResultHost solve_costates_single_sheet_lm(
 
             if (std::isfinite(rnorm_trial) && rnorm_trial < rnorm) {
                 accepted = true;
-                l_acc = l_trial;
+                l_acc.l1 = l.l1 + std::ldexp(1.0, -bt) * delta[0];
+                l_acc.l2 = l.l2 + std::ldexp(1.0, -bt) * delta[1];
                 dim_acc = dtrial;
                 for (int i = 0; i < dim_acc; ++i) {
                     r_acc[i] = r_trial[i];
                 }
                 cost_acc = out_trial.cost;
                 out0 = out_trial;
-                accepted_step = step;
+                accepted_step = std::ldexp(1.0, -bt);
                 break;
             }
-            step *= 0.5;
         }
 
         if (accepted) {

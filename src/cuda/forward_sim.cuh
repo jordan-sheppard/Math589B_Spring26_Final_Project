@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <cmath>
 
 #include "kahan.cuh"
@@ -11,12 +10,27 @@ namespace pendulum {
 
 enum class IntegratorKind { RK4 = 0, DP5 = 1 };
 
+// Functor (not a lambda) so the DP5/RK4 inner loop inlines cleanly on the host.
+struct AugHamiltonianRhs {
+    Params p{};
+    PEND_HD AugState operator()(double /*t*/, const AugState& aa) const { return aug_rhs(p, aa); }
+};
+
 struct ForwardSimOut {
     double terminal_x[2]{};
     double terminal_l[2]{};
     double dZ_dL0[4][2]{};
     double cost = 0.0;
 };
+
+PEND_HD inline int integration_num_steps(double T, double dt) {
+    const double q = T / dt;
+    int n = static_cast<int>(::ceil(q));
+    if (n < 1) {
+        n = 1;
+    }
+    return n;
+}
 
 PEND_HD inline void init_sensitivity_identity(double S[4][2]) {
     for (int i = 0; i < 4; ++i) {
@@ -40,17 +54,15 @@ PEND_HD inline ForwardSimOut simulate_forward(
     init_sensitivity_identity(a.S);
     a.Jq = 0.0;
 
-    const int n = std::max(1, static_cast<int>(std::ceil(T / dt)));
+    const int n = integration_num_steps(T, dt);
     const double h = T / static_cast<double>(n);
+
+    AugHamiltonianRhs rhs{p};
 
     KahanSum J;
     double t = 0.0;
     for (int i = 0; i < n; ++i) {
         const double f0 = running_cost(a.z);
-
-        const auto rhs = [&](double /*tt*/, const AugState& aa) {
-            return aug_rhs(p, aa);
-        };
 
         AugState a_next;
         if (integrator == IntegratorKind::DP5) {
