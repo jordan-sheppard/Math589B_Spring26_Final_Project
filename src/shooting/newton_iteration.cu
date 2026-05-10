@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <vector>
 
 #include "core/solver_debug.hpp"
@@ -43,15 +44,16 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
     VectorXd F;
     build_global_system(solver_arrays, sys_params, J, F);
 
-    const double r_norm_start = linf(F);
-    log.max_defect_norm = r_norm_start;
+    const double r_inf_start = linf(F);
+    const double r_l2_start = F.norm();
+    log.max_defect_norm = r_inf_start;
 
     const bool dbg = math589_solver_debug_enabled();
     const bool lm_verb = dbg && math589_solver_debug_lm_verbose();
     if (dbg) {
         std::fprintf(stderr,
-                     "[MATH589][LM] enter |r|_inf_before=%.6e (J size m=%lld n=%lld) lm_mu_in=%.6e\n",
-                     r_norm_start, static_cast<long long>(J.rows()),
+                     "[MATH589][LM] enter |r|_2=%.6e |r|_inf_before=%.6e (J m=%lld n=%lld) lm_mu=%.6e\n",
+                     r_l2_start, r_inf_start, static_cast<long long>(J.rows()),
                      static_cast<long long>(J.cols()), lm_mu);
     }
 
@@ -69,7 +71,7 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
     // When ‖r‖∞ is only tens-hundreds × tolerance, fixed relative cuts (e.g. 1e-5) demand
     // sub-representable reductions and every LM try fails (wrap=0: stall ~1e-4 then reject).
     const double tol = std::max(newton_params.tolerance, 1e-18);
-    const double rn = std::fabs(r_norm_start);
+    const double rn = std::fabs(r_inf_start);
     double rel_scale = 1.0;
     if (rn > 0.0) {
         rel_scale = rn / (200.0 * tol);
@@ -77,7 +79,13 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
         rel_scale = std::max(0.03, rel_scale);
     }
     const double rel_eff = rel_req * rel_scale;
-    const double accept_threshold = r_norm_start * (1.0 - rel_eff);
+    // Gauss–Newton/LM minimizes ‖F‖₂² merit; LM Armijo gates should match ‖F‖₂ (not ‖F‖∞),
+    // or ‖F‖∞ can stall flat while ‖F‖₂ still decreases — see plateau in debug NDJSON rejects.
+    const double accept_thresh_l2 = std::fma(-rel_eff, r_l2_start, r_l2_start);
+    const double inf_relaxed_cap = r_inf_start + 5.0 * tol;
+
+    const double l2_tol_ref =
+        tol * tol * static_cast<double>(std::max(F.size(), static_cast<Eigen::Index>(1)));
 
     // #region agent log
     {
@@ -88,9 +96,9 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
         if (lf)
             lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H1\",\"location\":\"newton_iteration.cu:"
                   "LM_gate\",\"message\":\"rel_scaling\",\"timestamp\":" << ts
-               << ",\"data\":{\"rn\":" << rn << ",\"tol\":" << tol << ",\"rel_req\":" << rel_req
-               << ",\"rel_scale\":" << rel_scale << ",\"rel_eff\":" << rel_eff
-               << ",\"accept_thr\":" << accept_threshold << "}}\n";
+               << ",\"data\":{\"r_inf\":" << r_inf_start << ",\"r_l2\":" << r_l2_start
+               << ",\"tol\":" << tol << ",\"rel_req\":" << rel_req << ",\"rel_scale\":" << rel_scale
+               << ",\"rel_eff\":" << rel_eff << ",\"accept_thr_l2\":" << accept_thresh_l2 << "}}\n";
     }
     // #endregion
 
@@ -131,7 +139,8 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
         }
 
         double eta_best = 1.0;
-        double best_residual = r_norm_start;
+        double best_l2 = r_l2_start;
+        double best_inf = r_inf_start;
         std::vector<double> trial_best = z_backup;
 
         int bt_used = -1;
@@ -147,13 +156,29 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
             VectorXd F_try;
             build_global_system(solver_arrays, sys_params, J_try, F_try);
 
-            const double r_try = linf(F_try);
-            if (r_try < best_residual) {
-                best_residual = r_try;
+            const double try_inf = linf(F_try);
+            if (try_inf > inf_relaxed_cap) {
+                eta *= 0.5;
+                continue;
+            }
+
+            const double try_l2 = F_try.norm();
+            const double l2_eps =
+                std::numeric_limits<double>::epsilon() *
+                std::fma(512.0, std::fabs(std::max(try_l2, best_l2)),
+                         std::fma(512.0, r_l2_start, l2_tol_ref));
+
+            const bool improves_l2_merit = try_l2 < best_l2 - l2_eps;
+            const bool tie_better_inf =
+                std::fabs(try_l2 - best_l2) <= l2_eps && try_inf < best_inf - l2_tol_ref;
+
+            if (improves_l2_merit || tie_better_inf) {
+                best_l2 = try_l2;
+                best_inf = try_inf;
                 trial_best = solver_arrays.h_node_guesses;
                 eta_best = eta;
                 bt_used = bt;
-                if (best_residual <= accept_threshold) {
+                if (best_l2 <= accept_thresh_l2) {
                     break;
                 }
             }
@@ -162,22 +187,23 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
 
         if (lm_verb) {
             std::fprintf(stderr,
-                         "[MATH589][LM] backtrack_eta_best=%.6e bt_index=%d |r|_after=%.6e "
-                         "|r|_before=%.6e sufficient_descent=%d\n",
-                         eta_best, bt_used, best_residual, r_norm_start,
-                         (best_residual <= accept_threshold) ? 1 : 0);
+                         "[MATH589][LM] backtrack_eta_best=%.6e bt_index=%d |r|_2_after=%.6e "
+                         "|r|_inf_after=%.6e suf_L2_descent=%d\n",
+                         eta_best, bt_used, best_l2, best_inf,
+                         (best_l2 <= accept_thresh_l2) ? 1 : 0);
         }
 
-        if (best_residual <= accept_threshold) {
+        if (best_l2 <= accept_thresh_l2) {
             solver_arrays.h_node_guesses = trial_best;
             lm_mu = std::max(newton_params.lm_mu_min, mu * newton_params.lm_mu_decrease);
             log.success = true;
-            log.max_defect_norm = best_residual;
+            log.max_defect_norm = best_inf;
             log.step_size_norm = eta_best * delta.norm();
             if (dbg) {
                 std::fprintf(stderr,
-                             "[MATH589][LM] ACCEPTED |r|_inf %.6e -> %.6e step_norm=%.6e lm_mu_out=%.6e\n",
-                             r_norm_start, best_residual, log.step_size_norm, lm_mu);
+                             "[MATH589][LM] ACCEPTED |r|_inf %.6e -> %.6e |r|_2 %.6e -> %.6e "
+                             "step_norm=%.6e lm_mu_out=%.6e\n",
+                             r_inf_start, best_inf, r_l2_start, best_l2, log.step_size_norm, lm_mu);
             }
             // #region agent log
             {
@@ -186,10 +212,12 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
                               .count();
                 std::ofstream lf(kMath589AgentLog976d44, std::ios::app);
                 if (lf)
-                    lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H2\",\"location\":\"newton_iteration."
-                          "cu:accept\",\"message\":\"lm_accepted\",\"timestamp\":" << ts
-                       << ",\"data\":{\"sub\":" << sub << ",\"r_before\":" << r_norm_start
-                       << ",\"r_after\":" << best_residual << ",\"accept_thr\":" << accept_threshold
+                    lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H2\",\"runId\":\"post_l2_merit\","
+                          "\"location\":\"newton_iteration.cu:accept\",\"message\":\"lm_accepted\","
+                          "\"timestamp\":"
+                       << ts << ",\"data\":{\"sub\":" << sub << ",\"r_inf_before\":" << r_inf_start
+                       << ",\"r_inf_after\":" << best_inf << ",\"r_l2_before\":" << r_l2_start
+                       << ",\"r_l2_after\":" << best_l2 << ",\"accept_thr_l2\":" << accept_thresh_l2
                        << ",\"lm_mu_out\":" << lm_mu << "}}\n";
             }
             // #endregion
@@ -203,10 +231,12 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
                           .count();
             std::ofstream lf(kMath589AgentLog976d44, std::ios::app);
             if (lf)
-                lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H2\",\"location\":\"newton_iteration.cu:"
-                      "reject_sub\",\"message\":\"lm_subiter_rejected\",\"timestamp\":" << ts
-                   << ",\"data\":{\"sub\":" << sub << ",\"best_r\":" << best_residual
-                   << ",\"accept_thr\":" << accept_threshold << ",\"mu\":" << mu << "}}\n";
+                lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H2\",\"runId\":\"post_l2_merit\","
+                      "\"location\":\"newton_iteration.cu:reject_sub\","
+                      "\"message\":\"lm_subiter_rejected\",\"timestamp\":"
+                   << ts << ",\"data\":{\"sub\":" << sub << ",\"best_l2\":" << best_l2
+                   << ",\"best_inf\":" << best_inf << ",\"accept_thr_l2\":" << accept_thresh_l2
+                   << ",\"mu\":" << mu << "}}\n";
         }
         // #endregion
 
@@ -218,8 +248,9 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
     solver_arrays.h_node_guesses = z_backup;
     if (dbg) {
         std::fprintf(stderr,
-                     "[MATH589][LM] FAILED all damping tries -> leave |r|_inf=%.6e lm_mu(now)=%.6e\n",
-                     r_norm_start, mu);
+                     "[MATH589][LM] FAILED all damping tries -> leave |r|_inf=%.6e |r|_2=%.6e "
+                     "lm_mu(now)=%.6e\n",
+                     r_inf_start, r_l2_start, mu);
     }
     // #region agent log
     {
@@ -228,9 +259,11 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
                       .count();
         std::ofstream lf(kMath589AgentLog976d44, std::ios::app);
         if (lf)
-            lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H3\",\"location\":\"newton_iteration.cu:"
-                  "fail_all\",\"message\":\"lm_failed_all_sub\",\"timestamp\":" << ts
-               << ",\"data\":{\"r_unchanged\":" << r_norm_start << ",\"mu_final\":" << mu << "}}\n";
+            lf << "{\"sessionId\":\"976d44\",\"hypothesisId\":\"H3\",\"runId\":\"post_l2_merit\","
+                  "\"location\":\"newton_iteration.cu:fail_all\",\"message\":\"lm_failed_all_sub\","
+                  "\"timestamp\":"
+               << ts << ",\"data\":{\"r_inf\":" << r_inf_start << ",\"r_l2\":" << r_l2_start
+               << ",\"mu_final\":" << mu << "}}\n";
     }
     // #endregion
     return log;
