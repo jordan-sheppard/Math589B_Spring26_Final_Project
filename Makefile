@@ -6,7 +6,7 @@ SHELL := /bin/bash
 .ONESHELL:
 
 # NVCCFLAGS = -O2 -arch=sm_60
-NVCCFLAGS = -g -G -O0 -arch=sm_60 -Isrc
+NVCCFLAGS = -O2 -Isrc
 
 SRC = \
 	src/main.cu \
