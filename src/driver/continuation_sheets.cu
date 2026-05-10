@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <set>
 #include <vector>
 
 #include "core/solver_debug.hpp"
@@ -52,11 +51,13 @@ Result solve(double target_theta, double target_phi, double alpha) {
     const int center_wrap = (int)std::lround(target_theta / TWO_PI);
     const int span =
         std::max(3, std::min(16, 3 + (int)std::ceil(std::abs(target_phi) * 0.45)));
-    std::set<int> wrap_candidates;
-    wrap_candidates.insert(center_wrap);
+    // Center sheet first, then shells center±1, center±2, ... (not std::set order: -3 before 0).
+    std::vector<int> wrap_candidates;
+    wrap_candidates.reserve(static_cast<size_t>(2 * span + 1));
+    wrap_candidates.push_back(center_wrap);
     for (int d = 1; d <= span; ++d) {
-        wrap_candidates.insert(center_wrap + d);
-        wrap_candidates.insert(center_wrap - d);
+        wrap_candidates.push_back(center_wrap + d);
+        wrap_candidates.push_back(center_wrap - d);
     }
 
     const bool dbg_drv = math589_solver_debug_enabled();
@@ -64,7 +65,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
         std::fprintf(stderr,
                      "[MATH589][DRIVER] target theta=%.10g phi=%.10g alpha=%.10g "
                      "center_wrap=%d span=%zu candidate_wraps_total=%zu\n",
-                     target_theta, target_phi, alpha, center_wrap, (size_t)span,
+                     target_theta, target_phi, alpha, center_wrap, static_cast<size_t>(span),
                      wrap_candidates.size());
     }
 

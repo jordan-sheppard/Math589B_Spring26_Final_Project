@@ -17,7 +17,7 @@ OptimizationResult solve_multiple_shooting(std::vector<double> &flat_node_guesse
     solver_arrays.h_node_guesses = flat_node_guesses;
 
     int iteration = 0;
-    double current_error = 1e9;
+    double current_error = -1.0;
     bool converged = false;
 
     double lm_mu = newton_params.lm_mu_initial;
@@ -53,7 +53,6 @@ OptimizationResult solve_multiple_shooting(std::vector<double> &flat_node_guesse
             iteration++;
             if (iteration >= newton_params.max_iterations) {
                 converged = false;
-                current_error = 1e9;
                 break;
             }
             continue;
@@ -81,13 +80,13 @@ OptimizationResult solve_multiple_shooting(std::vector<double> &flat_node_guesse
 
     if (dbg && !converged) {
         std::fprintf(stderr, "[MATH589][MS] END_NOT_CONVERGED iters_used=%d last_max|F|=%.6e\n",
-                     iteration, current_error);
+                     iteration, current_error >= 0.0 ? current_error : -1.0);
     }
 
     OptimizationResult final_result;
     final_result.success = converged;
     final_result.num_iterations = iteration;
-    final_result.final_error = current_error;
+    final_result.final_error = (current_error >= 0.0) ? current_error : 1e9;
 
     final_result.r.optimal_l1_init = solver_arrays.h_node_guesses[2];
     final_result.r.optimal_l2_init = solver_arrays.h_node_guesses[3];

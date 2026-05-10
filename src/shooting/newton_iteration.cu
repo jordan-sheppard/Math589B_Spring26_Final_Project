@@ -57,6 +57,8 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
     }
 
     const int n = static_cast<int>(z_backup.size());
+    const double rel_req = newton_params.lm_relative_reduction_min;
+    const double accept_threshold = r_norm_start * (1.0 - rel_req);
 
     for (int sub = 0; sub < newton_params.lm_max_subiterations; ++sub) {
         SparseMat A = JtJ;
@@ -117,7 +119,7 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
                 trial_best = solver_arrays.h_node_guesses;
                 eta_best = eta;
                 bt_used = bt;
-                if (best_residual <= r_norm_start * (1.0 - 1e-13)) {
+                if (best_residual <= accept_threshold) {
                     break;
                 }
             }
@@ -127,12 +129,12 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
         if (lm_verb) {
             std::fprintf(stderr,
                          "[MATH589][LM] backtrack_eta_best=%.6e bt_index=%d |r|_after=%.6e "
-                         "|r|_before=%.6e accepted_strict_descent=%d\n",
+                         "|r|_before=%.6e sufficient_descent=%d\n",
                          eta_best, bt_used, best_residual, r_norm_start,
-                         (best_residual < r_norm_start) ? 1 : 0);
+                         (best_residual <= accept_threshold) ? 1 : 0);
         }
 
-        if (best_residual < r_norm_start) {
+        if (best_residual <= accept_threshold) {
             solver_arrays.h_node_guesses = trial_best;
             lm_mu = std::max(newton_params.lm_mu_min, mu * newton_params.lm_mu_decrease);
             log.success = true;

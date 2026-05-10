@@ -127,6 +127,8 @@ struct NewtonParams {
     double lm_mu_min = 1e-12;
     double lm_mu_max = 1e12;
     int lm_max_subiterations = 12;
+    /// Line search rejects “progress” tinier than this relative drop in ‖r‖∞ (guards FP noise).
+    double lm_relative_reduction_min = 1e-5;
     /// Cap on ‖δ‖ before backtracking.
     double max_delta_norm = 1e2;
     int backtrack_max = 8;
