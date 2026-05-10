@@ -49,8 +49,8 @@ Result solve(double target_theta, double target_phi, double alpha) {
         }
         double ds = 0.1;
 
-        std::printf("\n=== Searching sheet wrap=%d, theta_goal=%.6f ===\n", wrap, sys_params.theta_goal);
-        std::printf("Starting Multiple Shooting Solver for Theta = %.6f, Phi = %.6f...\n",
+        // std::printf("\n=== Searching sheet wrap=%d, theta_goal=%.6f ===\n", wrap, sys_params.theta_goal);
+        // std::printf("Starting Multiple Shooting Solver for Theta = %.6f, Phi = %.6f...\n",
                     sys_params.theta_init, sys_params.phi_init);
 
         SystemParams candidate_params = sys_params;
@@ -62,7 +62,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
             solve_multiple_shooting(active_trajectory, candidate_params, int_params, newton_params);
 
         if (!last_success.success) {
-            std::printf("Failed to converge on the initial seed for wrap=%d!\n", wrap);
+            // std::printf("Failed to converge on the initial seed for wrap=%d!\n", wrap);
             continue;
         }
 
@@ -72,7 +72,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
             candidate_params.theta_init = next_s * target_theta;
             candidate_params.phi_init = next_s * target_phi;
 
-            std::printf("\n=== Adaptive Step: s = %.4f (Theta = %.4f, Phi = %.4f) ===\n", next_s,
+            // std::printf("\n=== Adaptive Step: s = %.4f (Theta = %.4f, Phi = %.4f) ===\n", next_s,
                         candidate_params.theta_init, candidate_params.phi_init);
 
             std::vector<double> candidate_trajectory = active_trajectory;
@@ -87,21 +87,21 @@ Result solve(double target_theta, double target_phi, double alpha) {
 
                 if (result.num_iterations <= 4) {
                     ds *= 1.5;
-                    std::printf("  -> Fast convergence! Increasing step size to ds = %.5f\n", ds);
+                    // std::printf("  -> Fast convergence! Increasing step size to ds = %.5f\n", ds);
                 }
             } else {
                 ds *= 0.5;
-                std::printf("  -> Step failed! Shrinking step size to ds = %.5f\n", ds);
+                // std::printf("  -> Step failed! Shrinking step size to ds = %.5f\n", ds);
 
                 if (ds < MIN_CONTINUATION_STEP_SIZE) {
-                    std::printf("CRITICAL FAILURE: Manifold lost. ds too small.\n");
+                    // std::printf("CRITICAL FAILURE: Manifold lost. ds too small.\n");
                     break;
                 }
             }
         }
 
         if (last_success.success) {
-            std::printf("\n--- Finished wrap=%d with cost %.10f ---\n", wrap, last_success.r.optimal_cost);
+            // std::printf("\n--- Finished wrap=%d with cost %.10f ---\n", wrap, last_success.r.optimal_cost);
             if (!found_best || last_success.r.optimal_cost < best_cost) {
                 found_best = true;
                 best_cost = last_success.r.optimal_cost;
@@ -114,11 +114,11 @@ Result solve(double target_theta, double target_phi, double alpha) {
     }
 
     if (!found_best) {
-        std::printf("\nERROR: No successful sheet found. Returning last attempted solution.\n");
+        // std::printf("\nERROR: No successful sheet found. Returning last attempted solution.\n");
         return best_result;
     }
 
-    std::printf("\n>>> BEST SHEET: wrap=%d, theta_goal=%.6f, cost=%.10f <<<\n", best_wrap,
+    // std::printf("\n>>> BEST SHEET: wrap=%d, theta_goal=%.6f, cost=%.10f <<<\n", best_wrap,
                 best_result.final_theta_goal, best_result.optimal_cost);
 
     return best_result;

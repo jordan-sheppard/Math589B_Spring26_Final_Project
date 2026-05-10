@@ -25,7 +25,9 @@ SRC = \
 #
 # Eigen must appear as $(EIGEN_INC)/Eigen/Dense. Many HPC "eigen" modules set EIGEN3_INCLUDE_DIR
 # or only expose pkg-config after load; /usr/include/eigen3 often does not exist on compute nodes.
-all:
+.PHONY: all test clean
+
+$(TARGET): $(SRC) Makefile.colab
 # module load eigen
 # module load cuda11/11.8
 	EIGEN_INC_RESOLVED=""; \
@@ -65,6 +67,11 @@ all:
 		exit 1; \
 	fi; \
 	$(NVCC) $(NVCCFLAGS) -isystem "$$EIGEN_INC_RESOLVED" $(SRC) -o $(TARGET)
+
+all: $(TARGET)
+
+test: $(TARGET)
+	python tools/run_grader.py
 
 clean:
 	rm -f $(TARGET)

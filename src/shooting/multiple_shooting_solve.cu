@@ -30,7 +30,7 @@ OptimizationResult solve_multiple_shooting(std::vector<double> &flat_node_guesse
 
         current_error = log.max_defect_norm;
 
-        printf("Iter %d | Max Defect: %.10e | Step Size: %.10e\n", iteration, log.max_defect_norm,
+        // printf("Iter %d | Max Defect: %.10e | Step Size: %.10e\n", iteration, log.max_defect_norm,
                log.step_size_norm);
 
         if (current_error < newton_params.tolerance) {
