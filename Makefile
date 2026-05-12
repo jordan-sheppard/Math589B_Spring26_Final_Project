@@ -5,8 +5,11 @@ NVCC   = nvcc
 SHELL := /bin/bash
 .ONESHELL:
 
-# NVCCFLAGS = -O2 -arch=sm_60
-NVCCFLAGS = -O2 -Isrc
+# Embed SASS for the GPUs you run on. UA Ocelote: P100 (sm_60); UA Puma: V100 (sm_70).
+# If `solver` prints all zeros, a common cause is kernels built for the wrong arch (no match → failed launch).
+# Override: make CUDA_GENCODE="-gencode arch=compute_80,code=sm_80"  # A100, etc.
+CUDA_GENCODE ?= -gencode arch=compute_60,code=sm_60 -gencode arch=compute_70,code=sm_70
+NVCCFLAGS = -O2 -Isrc $(CUDA_GENCODE)
 
 # CUDA module name varies by cluster; run `module avail cuda` on a compute node. UA Puma often has
 # cuda12/*; UA Ocelote often only has cuda11/11.8 — use:
