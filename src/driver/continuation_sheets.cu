@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -147,11 +148,53 @@ Result solve(double target_theta, double target_phi, double alpha) {
                      "(Ocelote P100 sm_60, Puma V100 sm_70), run on a GPU allocation, and use a CUDA "
                      "module that exists on that cluster (Ocelote: make CUDA_MODULE=cuda11/11.8 "
                      "MAX_HOST_GCC_MAJOR=11).\n");
+        // #region agent log
+        {
+            long long ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+            std::FILE *df = std::fopen(
+                "/Users/jordan/math/math589/semester2/coding/Math589B_Spring26_Final_Project/.cursor/"
+                "debug-a00cc2.log",
+                "a");
+            if (df) {
+                std::fprintf(df,
+                               "{\"sessionId\":\"a00cc2\",\"timestamp\":%lld,\"location\":"
+                               "\"continuation_sheets.cu:no_best\",\"message\":\"solve_exit\",\"hypothesisId\":"
+                               "\"H4\",\"data\":{\"theta\":%.17g,\"phi\":%.17g,\"alpha\":%.17g,\"found_best\":0}}\n",
+                               ts, target_theta, target_phi, alpha);
+                std::fclose(df);
+            }
+        }
+        // #endregion
         return best_result;
     }
 
     // std::printf("\n>>> BEST SHEET: wrap=%d, theta_goal=%.6f, cost=%.10f <<<\n", best_wrap,
     //            best_result.final_theta_goal, best_result.optimal_cost);
+
+    // #region agent log
+    {
+        long long ts =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        std::FILE *df = std::fopen(
+            "/Users/jordan/math/math589/semester2/coding/Math589B_Spring26_Final_Project/.cursor/"
+            "debug-a00cc2.log",
+            "a");
+        if (df) {
+            std::fprintf(df,
+                           "{\"sessionId\":\"a00cc2\",\"timestamp\":%lld,\"location\":"
+                           "\"continuation_sheets.cu:ok\",\"message\":\"solve_exit\",\"hypothesisId\":\"H4\","
+                           "\"data\":{\"theta\":%.17g,\"phi\":%.17g,\"alpha\":%.17g,\"found_best\":1,"
+                           "\"best_wrap\":%d,\"theta_goal\":%.17g,\"l1\":%.17g,\"l2\":%.17g,\"cost\":%.17g}}\n",
+                           ts, target_theta, target_phi, alpha, best_wrap, best_result.final_theta_goal,
+                           best_result.optimal_l1_init, best_result.optimal_l2_init, best_result.optimal_cost);
+            std::fclose(df);
+        }
+    }
+    // #endregion
 
     return best_result;
 }

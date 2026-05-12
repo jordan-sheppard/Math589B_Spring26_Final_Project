@@ -1,5 +1,6 @@
 #include "shooting/multiple_shooting_solve.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <vector>
 
@@ -58,6 +59,32 @@ OptimizationResult solve_multiple_shooting(std::vector<double> &flat_node_guesse
     if (converged) {
         flat_node_guesses = solver_arrays.h_node_guesses;
     }
+
+    // #region agent log
+    {
+        static int ms_i = 0;
+        if (ms_i++ < 120) {
+            long long ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+            std::FILE *df = std::fopen(
+                "/Users/jordan/math/math589/semester2/coding/Math589B_Spring26_Final_Project/.cursor/"
+                "debug-a00cc2.log",
+                "a");
+            if (df) {
+                std::fprintf(df,
+                               "{\"sessionId\":\"a00cc2\",\"timestamp\":%lld,\"location\":"
+                               "\"multiple_shooting_solve.cu:return\",\"message\":\"ms_done\",\"hypothesisId\":"
+                               "\"H3\",\"data\":{\"backward_time\":%d,\"converged\":%d,\"iters\":%d,\"final_err\":"
+                               "%.17g,\"l1\":%.17g,\"l2\":%.17g,\"cost\":%.17g}}\n",
+                               ts, (int)int_params.backward_time, converged ? 1 : 0, iteration, current_error,
+                               final_result.r.optimal_l1_init, final_result.r.optimal_l2_init,
+                               final_result.r.optimal_cost);
+                std::fclose(df);
+            }
+        }
+    }
+    // #endregion
 
     return final_result;
 }
