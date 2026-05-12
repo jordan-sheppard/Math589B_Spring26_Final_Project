@@ -153,10 +153,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
             long long ts = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::system_clock::now().time_since_epoch())
                                .count();
-            std::FILE *df = std::fopen(
-                "/Users/jordan/math/math589/semester2/coding/Math589B_Spring26_Final_Project/.cursor/"
-                "debug-a00cc2.log",
-                "a");
+            std::FILE *df = std::fopen("debug-a00cc2.log", "a");
             if (df) {
                 std::fprintf(df,
                                "{\"sessionId\":\"a00cc2\",\"timestamp\":%lld,\"location\":"
@@ -179,10 +176,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch())
                 .count();
-        std::FILE *df = std::fopen(
-            "/Users/jordan/math/math589/semester2/coding/Math589B_Spring26_Final_Project/.cursor/"
-            "debug-a00cc2.log",
-            "a");
+        std::FILE *df = std::fopen("debug-a00cc2.log", "a");
         if (df) {
             std::fprintf(df,
                            "{\"sessionId\":\"a00cc2\",\"timestamp\":%lld,\"location\":"
