@@ -1,7 +1,9 @@
 #include "shooting/newton_iteration.hpp"
 
-#include <chrono>
-#include <cstdio>
+// Computational split: `evaluate_segments_on_gpu` is embarrassingly parallel over segments (device
+// IVP + discrete sensitivity propagation inside `simulate_segment`); `build_global_system` couples
+// segments through continuity and boundary conditions on the host (Eigen triplets). The linear algebra
+// step uses the same ordering of unknowns as `h_node_guesses` (stacked knots).
 
 #define EIGEN_NO_CUDA
 #define EIGEN_DONT_VECTORIZE
@@ -26,58 +28,21 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
 
     solver.compute(J);
     if (solver.info() != Eigen::Success) {
-        // printf("Eigen SparseLU failed to factorize the Jacobian!\n");
         log.success = false;
-        // #region agent log
-        {
-            static int nl = 0;
-            if (nl++ < 24) {
-                long long ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::system_clock::now().time_since_epoch())
-                                   .count();
-                std::FILE *df = std::fopen("debug-a00cc2.log", "a");
-                if (df) {
-                    std::fprintf(df,
-                                   "{\"sessionId\":\"a00cc2\",\"timestamp\":%lld,\"location\":"
-                                   "\"newton_iteration.cu:lu_fail\",\"message\":\"sparse_lu\",\"hypothesisId\":"
-                                   "\"H1\",\"data\":{\"backward_time\":%d,\"lu_info\":%d}}\n",
-                                   ts, (int)int_params.backward_time, (int)solver.info());
-                    std::fclose(df);
-                }
-            }
-        }
-        // #endregion
         return log;
     }
 
+    // Full Newton: dS solves the linearized shooting equations J dS = -F(S), S in R^{4N}.
     VectorXd dS = solver.solve(-F);
 
+    // Additive update on the MS unknown vector (same component order as F and columns of J).
     for (int i = 0; i < dS.size(); i++) {
         solver_arrays.h_node_guesses[i] += dS(i);
     }
 
+    // Residual norm ||F||_infty (max shooting defect) and Euclidean step length ||dS||_2 for logging.
     log.max_defect_norm = F.lpNorm<Eigen::Infinity>();
     log.step_size_norm = dS.norm();
-
-    // #region agent log
-    {
-        static int nl = 0;
-        if (nl++ < 48) {
-            long long ts = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::system_clock::now().time_since_epoch())
-                               .count();
-            std::FILE *df = std::fopen("debug-a00cc2.log", "a");
-            if (df) {
-                std::fprintf(df,
-                               "{\"sessionId\":\"a00cc2\",\"timestamp\":%lld,\"location\":"
-                               "\"newton_iteration.cu:step\",\"message\":\"newton_step\",\"hypothesisId\":\"H1\","
-                               "\"data\":{\"backward_time\":%d,\"maxF\":%.17g,\"stepNorm\":%.17g}}\n",
-                               ts, (int)int_params.backward_time, log.max_defect_norm, log.step_size_norm);
-                std::fclose(df);
-            }
-        }
-    }
-    // #endregion
 
     return log;
 }

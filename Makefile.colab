@@ -8,8 +8,7 @@ SHELL := /bin/bash
 
 # NVCCFLAGS = -O2 -arch=sm_60
 NVCCFLAGS = -O2 -Isrc \
-	-diag-suppress 20012 \
-	-diag-suppress 20015
+	-diag-suppress=550,20012,20015
 
 SRC = \
 	src/main.cu \

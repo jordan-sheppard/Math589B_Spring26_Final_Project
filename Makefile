@@ -9,7 +9,7 @@ SHELL := /bin/bash
 # If `solver` prints all zeros, a common cause is kernels built for the wrong arch (no match → failed launch).
 # Override: make CUDA_GENCODE="-gencode arch=compute_80,code=sm_80"  # A100, etc.
 CUDA_GENCODE ?= -gencode arch=compute_60,code=sm_60 -gencode arch=compute_70,code=sm_70
-NVCCFLAGS = -O2 -Isrc $(CUDA_GENCODE)
+NVCCFLAGS = -O2 -Isrc $(CUDA_GENCODE) -diag-suppress=550,20012
 
 # CUDA module name varies by cluster; run `module avail cuda` on a compute node. UA Puma often has
 # cuda12/*; UA Ocelote often only has cuda11/11.8 — use:
