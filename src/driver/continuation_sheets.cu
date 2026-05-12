@@ -43,14 +43,29 @@ static inline bool refine_better_cost_first(const StablePatchRefineOut &a, const
 }
 
 // #region agent log
+/// Opens first writable path: env `MATH589_AGENT_LOG_PATH`, then `debug-c83f37.log` (cwd = repo root when
+/// `tools/run_grader.py` runs), then `.cursor/debug-c83f37.log`, then workspace default for local Cursor.
+static inline FILE *math589_agent_try_open_log() {
+    const char *env = std::getenv("MATH589_AGENT_LOG_PATH");
+    if (env && env[0] != '\0') {
+        FILE *fp = std::fopen(env, "a");
+        if (fp) return fp;
+    }
+    static constexpr const char *k_fallbacks[] = {
+        "debug-c83f37.log",
+        ".cursor/debug-c83f37.log",
+        "/Users/jordan/math/math589/semester2/coding/Math589B_Spring26_Final_Project/.cursor/debug-c83f37.log",
+    };
+    for (const char *p : k_fallbacks) {
+        FILE *fp = std::fopen(p, "a");
+        if (fp) return fp;
+    }
+    return nullptr;
+}
+
 static inline void math589_agent_log_ndjson(const char *hypothesis_id, const char *location, const char *message,
                                             const char *data_json_object_body) {
-    static constexpr const char *k_log_path_primary =
-        "/Users/jordan/math/math589/semester2/coding/Math589B_Spring26_Final_Project/.cursor/debug-c83f37.log";
-    FILE *fp = std::fopen(k_log_path_primary, "a");
-    if (!fp) {
-        fp = std::fopen(".cursor/debug-c83f37.log", "a");
-    }
+    FILE *fp = math589_agent_try_open_log();
     if (!fp) return;
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch())
