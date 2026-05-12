@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <fstream>
 #include <limits>
+#include <sstream>
 #include <vector>
 
 #include "core/solver_debug.hpp"
@@ -24,6 +25,19 @@ namespace {
 // Agent NDJSON log (session 976d44): opened relative to process cwd — run solver from repo dir on Colab
 // so `math589_debug_976d44.log` lands next to `./solver`.
 constexpr const char *kMath589AgentLog976d44 = "math589_debug_976d44.log";
+constexpr const char *kDebugLogPath390801 = ".cursor/debug-390801.log";
+
+inline void appendDebug390801(const char *run_id, const char *hypothesis_id, const char *location,
+                              const char *message, const std::string &data_json) {
+    auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::system_clock::now().time_since_epoch())
+                  .count();
+    std::ofstream lf(kDebugLogPath390801, std::ios::app);
+    if (!lf) return;
+    lf << "{\"sessionId\":\"390801\",\"runId\":\"" << run_id << "\",\"hypothesisId\":\""
+       << hypothesis_id << "\",\"location\":\"" << location << "\",\"message\":\"" << message
+       << "\",\"data\":" << data_json << ",\"timestamp\":" << ts << "}\n";
+}
 } // namespace
 
 IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sys_params,
@@ -47,6 +61,16 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
     const double r_inf_start = linf(F);
     const double r_l2_start = F.norm();
     log.max_defect_norm = r_inf_start;
+    const int N = sys_params.num_shooting_intervals;
+    const int n_state = 4 * N;
+    double max_cont = 0.0;
+    for (int i = 0; i < std::max(0, 4 * (N - 1)); ++i) {
+        max_cont = std::max(max_cont, std::abs(F(i)));
+    }
+    const double max_bc =
+        std::max(std::max(std::abs(F(std::max(0, n_state - 4))), std::abs(F(std::max(0, n_state - 3)))),
+                 std::max(std::abs(F(std::max(0, n_state - 2))), std::abs(F(std::max(0, n_state - 1)))));
+    const double max_man = std::max(std::abs(F(std::max(0, n_state))), std::abs(F(std::max(0, n_state + 1))));
 
     const bool dbg = math589_solver_debug_enabled();
     const bool lm_verb = dbg && math589_solver_debug_lm_verbose();
@@ -86,6 +110,17 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
 
     const double l2_tol_ref =
         tol * tol * static_cast<double>(std::max(F.size(), static_cast<Eigen::Index>(1)));
+
+    // #region agent log
+    {
+        std::ostringstream d;
+        d << "{\"r_inf\":" << r_inf_start << ",\"r_l2\":" << r_l2_start << ",\"max_cont\":" << max_cont
+          << ",\"max_bc\":" << max_bc << ",\"max_man\":" << max_man << ",\"J_rows\":" << J.rows()
+          << ",\"J_cols\":" << J.cols() << ",\"lm_mu_in\":" << lm_mu << "}";
+        appendDebug390801("pre-fix", "H2", "newton_iteration.cu:entry_blocks",
+                          "residual_block_breakdown", d.str());
+    }
+    // #endregion
 
     // #region agent log
     {
@@ -137,6 +172,15 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
         if (dn > newton_params.max_delta_norm && dn > 0.0) {
             delta *= newton_params.max_delta_norm / dn;
         }
+        // #region agent log
+        {
+            std::ostringstream d;
+            d << "{\"sub\":" << sub << ",\"mu\":" << mu << ",\"delta_norm\":" << dn
+              << ",\"JtF_inf\":" << JtF.lpNorm<Eigen::Infinity>() << "}";
+            appendDebug390801("pre-fix", "H3", "newton_iteration.cu:delta_quality",
+                              "lm_delta_quality", d.str());
+        }
+        // #endregion
 
         double eta_best = 1.0;
         double best_l2 = r_l2_start;
@@ -207,6 +251,14 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
             }
             // #region agent log
             {
+                std::ostringstream d390801;
+                d390801 << "{\"sub\":" << sub << ",\"r_inf_before\":" << r_inf_start
+                        << ",\"r_inf_after\":" << best_inf << ",\"r_l2_before\":" << r_l2_start
+                        << ",\"r_l2_after\":" << best_l2 << ",\"accept_thr_l2\":" << accept_thresh_l2
+                        << ",\"eta_best\":" << eta_best << ",\"mu\":" << mu << "}";
+                appendDebug390801("pre-fix", "H1", "newton_iteration.cu:accept_gate",
+                                  "lm_accept_with_threshold", d390801.str());
+
                 auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::system_clock::now().time_since_epoch())
                               .count();
@@ -226,6 +278,13 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
 
         // #region agent log
         {
+            std::ostringstream d390801;
+            d390801 << "{\"sub\":" << sub << ",\"best_l2\":" << best_l2 << ",\"best_inf\":" << best_inf
+                    << ",\"accept_thr_l2\":" << accept_thresh_l2 << ",\"mu\":" << mu
+                    << ",\"eta_best\":" << eta_best << ",\"bt_used\":" << bt_used << "}";
+            appendDebug390801("pre-fix", "H1", "newton_iteration.cu:reject_gate",
+                              "lm_reject_threshold_miss", d390801.str());
+
             auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
                           std::chrono::system_clock::now().time_since_epoch())
                           .count();
@@ -254,6 +313,12 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
     }
     // #region agent log
     {
+        std::ostringstream d390801;
+        d390801 << "{\"r_inf\":" << r_inf_start << ",\"r_l2\":" << r_l2_start << ",\"mu_final\":" << mu
+                << ",\"lm_subiters\":" << newton_params.lm_max_subiterations << "}";
+        appendDebug390801("pre-fix", "H4", "newton_iteration.cu:fail_all",
+                          "lm_failed_all_subiters", d390801.str());
+
         auto ts = std::chrono::duration_cast<std::chrono::milliseconds>(
                       std::chrono::system_clock::now().time_since_epoch())
                       .count();
