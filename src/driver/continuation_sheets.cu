@@ -34,7 +34,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
     newton_params.max_iterations = MAX_NEWTON_ITERATIONS;
     newton_params.tolerance = NEWTON_TOL;
 
-    Result best_result;
+    Result best_result{};
     bool found_best = false;
     double best_cost = 1e300;
     int best_wrap = 0;
@@ -114,7 +114,12 @@ Result solve(double target_theta, double target_phi, double alpha) {
     }
 
     if (!found_best) {
-        // std::printf("\nERROR: No successful sheet found. Returning last attempted solution.\n");
+        std::fprintf(stderr,
+                     "solver: no continuation sheet converged (stdout may show 0 0 0). "
+                     "Common on clusters: rebuild with Makefile CUDA_GENCODE matching the node GPU "
+                     "(Ocelote P100 sm_60, Puma V100 sm_70), run on a GPU allocation, and use a CUDA "
+                     "module that exists on that cluster (Ocelote: make CUDA_MODULE=cuda11/11.8 "
+                     "MAX_HOST_GCC_MAJOR=11).\n");
         return best_result;
     }
 

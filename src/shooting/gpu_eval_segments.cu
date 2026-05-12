@@ -31,6 +31,7 @@ void evaluate_segments_on_gpu(HDArrays &solver_arrays, const SystemParams &sys_p
 
     multiple_shooting_kernel<<<blocks_per_grid, threads_per_block>>>(
         solver_arrays.get_device_arrays(), sys_params, int_params);
+    gpuErrchk(cudaPeekAtLastError());
     gpuErrchk(cudaDeviceSynchronize());
 
     solver_arrays.copy_results_to_host();
