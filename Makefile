@@ -12,6 +12,7 @@ SRC = \
 	src/main.cu \
 	src/core/host_buffers.cu \
 	src/core/manifold_seed.cu \
+	src/driver/backward_manifold_seed.cu \
 	src/shooting/gpu_eval_segments.cu \
 	src/shooting/defect_jacobian_host.cu \
 	src/shooting/newton_iteration.cu \

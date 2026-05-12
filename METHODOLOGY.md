@@ -4,6 +4,8 @@ This document specifies the mathematical methodology for the CUDA implementation
 
 The public API is the assignment scaffold: `solve(theta, phi, alpha)` in [`src/solver.hpp`](src/solver.hpp), implemented by the driver in [`src/driver/continuation_sheets.cu`](src/driver/continuation_sheets.cu).
 
+**Default initialization (no IC homotopy):** for each candidate $\theta$-sheet, the driver builds a multiple-shooting warm start in [`src/driver/backward_manifold_seed.cu`](src/driver/backward_manifold_seed.cu): a small 2D grid of terminal states on the **linearized stable graph** $(\delta_\theta,\delta_\varphi,\lambda\approx P\delta)$ near the upright target for that sheet, **backward** Hamiltonian integration with a **running minimum** of squared distance (wrapped $\theta$) to the physical $(\theta_0,\varphi_0)$, then **forward** integration to fill all MS nodes. If that screening fails numerically, the driver falls back to the legacy straight-line $P$-linear guess. Set **`MATH589_IC_HOMOTOPY=1`** to restore the previous **initial-condition homotopy** path (scale $(\theta,\varphi)$ toward $0$ before stepping to the full target). See [`src/core/solver_debug.hpp`](src/core/solver_debug.hpp).
+
 ---
 
 ## 1. Problem statement
@@ -267,13 +269,13 @@ This formulation treats **overdetermined** residuals ($m>n$) directly. A square 
 
 ## 7. Outer algorithm (conceptual)
 
-1. **Initialize** nodal guesses $Z^{(0)}$ (e.g. linear interpolation in $(\theta,\varphi)$ and optional $P$-based costate seed).  
+1. **Initialize** nodal guesses $Z^{(0)}$ (default: backward stable-manifold cloud + forward fill; optional legacy linear $P$-guess or IC homotopy when `MATH589_IC_HOMOTOPY=1`).  
 2. **GPU:** evaluate all segments in parallel; copy $\hat z_k$ and $M_k^{\mathrm{end}}$ to host.  
 3. **Host:** assemble $r$ and sparse $J$ of size $m\times n$.  
 4. **Host:** compute LM step $\delta$; update $Z \leftarrow Z + \delta$ (with clipping/backtracking).  
 5. Repeat until $\|r\|_\infty \le \varepsilon_{\mathrm{tol}}$ or iteration cap.
 
-The driver may wrap this loop in **homotopy** on initial conditions and **multi-sheet** search in $\theta$ modulo $2\pi$—see [`src/driver/continuation_sheets.cu`](src/driver/continuation_sheets.cu).
+The driver performs **multi-sheet** search in $\theta$ modulo $2\pi$ and optionally **IC homotopy** when enabled—see [`src/driver/continuation_sheets.cu`](src/driver/continuation_sheets.cu).
 
 ---
 
@@ -303,7 +305,8 @@ The driver may wrap this loop in **homotopy** on initial conditions and **multi-
 | LM normal-equation solve | [`src/shooting/newton_iteration.cu`](src/shooting/newton_iteration.cu) |
 | Outer MS loop | [`src/shooting/multiple_shooting_solve.cu`](src/shooting/multiple_shooting_solve.cu) |
 | Continuation / sheets | [`src/driver/continuation_sheets.cu`](src/driver/continuation_sheets.cu) |
-| Host $P(\alpha)$ | Eigen-based helper (new translation unit or header), called from driver or assembly |
+| Backward cloud MS warm start | [`src/driver/backward_manifold_seed.cu`](src/driver/backward_manifold_seed.cu) |
+| Host $P(\alpha)$ | [`src/core/manifold_seed.cu`](src/core/manifold_seed.cu) |
 
 ---
 
