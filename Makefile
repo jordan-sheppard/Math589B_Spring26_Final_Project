@@ -26,6 +26,7 @@ NVCC_CCBIN ?=
 SRC = \
 	src/main.cu \
 	src/core/host_buffers.cu \
+	src/warm_start/backward_ivp_batch.cu \
 	src/shooting/gpu_eval_segments.cu \
 	src/shooting/defect_jacobian_host.cu \
 	src/shooting/newton_iteration.cu \

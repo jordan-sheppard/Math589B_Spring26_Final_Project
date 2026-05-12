@@ -5,6 +5,7 @@
 
 #include "core/solver_types.cuh"
 #include "shooting/multiple_shooting_solve.hpp"
+#include "warm_start/backward_ivp_warmstart.hpp"
 
 Result solve(double target_theta, double target_phi, double alpha) {
     const int NUM_SHOOTING_INTERVALS = 20;
@@ -57,7 +58,10 @@ Result solve(double target_theta, double target_phi, double alpha) {
         candidate_params.theta_init = current_s * target_theta;
         candidate_params.phi_init = current_s * target_phi;
 
-        std::vector<double> active_trajectory = compute_linear_initial_guess(candidate_params);
+        std::vector<double> active_trajectory = compute_backward_eigen_ms_warm_start(candidate_params, int_params);
+        if (active_trajectory.empty()) {
+            active_trajectory = compute_linear_initial_guess(candidate_params);
+        }
         OptimizationResult last_success =
             solve_multiple_shooting(active_trajectory, candidate_params, int_params, newton_params);
 
