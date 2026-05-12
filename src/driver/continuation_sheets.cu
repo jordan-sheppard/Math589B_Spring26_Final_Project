@@ -48,6 +48,9 @@ Result solve(double target_theta, double target_phi, double alpha) {
     bool found_best = false;
     double best_cost = 1e300;
     int best_wrap = 0;
+    bool found_fallback = false;
+    double best_fallback_err = 1e300;
+    Result best_fallback_result;
 
     const int center_wrap = (int)std::lround(target_theta / TWO_PI);
     const int span =
@@ -212,6 +215,20 @@ Result solve(double target_theta, double target_phi, double alpha) {
                     std::fprintf(stderr,
                                  "[MATH589][DRIVER] MS solve FAILED wrap=%d (skip sheet)\n", wrap);
                 }
+                if (std::isfinite(last_success.final_error) &&
+                    last_success.final_error < best_fallback_err) {
+                    best_fallback_err = last_success.final_error;
+                    found_fallback = true;
+                    best_fallback_result = last_success.r;
+                    best_fallback_result.optimal_theta_wraps = wrap;
+                    best_fallback_result.final_theta_goal = sys_params.theta_goal;
+                    if (dbg_drv) {
+                        std::fprintf(
+                            stderr,
+                            "[MATH589][DRIVER] fallback update wrap=%d final_err=%.6e cost=%.10g\n",
+                            wrap, last_success.final_error, last_success.r.optimal_cost);
+                    }
+                }
                 continue;
             }
 
@@ -249,6 +266,17 @@ Result solve(double target_theta, double target_phi, double alpha) {
     }
 
     if (!found_best) {
+        if (found_fallback) {
+            if (dbg_drv) {
+                std::fprintf(stderr,
+                             "[MATH589][DRIVER] returning FALLBACK best_nonconverged "
+                             "final_err=%.6e wrap=%d l1=%.10f l2=%.10f cost=%.10f\n",
+                             best_fallback_err, best_fallback_result.optimal_theta_wraps,
+                             best_fallback_result.optimal_l1_init, best_fallback_result.optimal_l2_init,
+                             best_fallback_result.optimal_cost);
+            }
+            return best_fallback_result;
+        }
         if (dbg_drv) {
             std::fprintf(stderr,
                          "[MATH589][DRIVER] solve() returning DEFAULT (found_best=false) -> zeros\n");
