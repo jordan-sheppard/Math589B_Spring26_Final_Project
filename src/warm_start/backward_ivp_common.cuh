@@ -4,8 +4,7 @@
 
 namespace warm_start {
 
-constexpr int kRGridCount = 15;
-constexpr int kABGridSize = 40;
+constexpr int kPatchGrid = 49;
 
 __host__ __device__ inline void varstate_zero_m(VarState &v) {
 #pragma unroll
@@ -50,30 +49,35 @@ __host__ __device__ inline double theta_phi_distance_wrapped(double theta, doubl
     return sqrt(dtheta * dtheta + dphi * dphi);
 }
 
-/// Terminal state at forward time T: equilibrium at goal plus a*v1 + b*v2.
-__host__ __device__ inline VarState make_terminal_state(const SystemParams &sys, double a, double b, const double v1[4],
-                                                        const double v2[4]) {
-    VarState x;
-    x.theta() = sys.theta_goal + a * v1[0] + b * v2[0];
-    x.phi() = sys.phi_goal + a * v1[1] + b * v2[1];
-    x.l1() = a * v1[2] + b * v2[2];
-    x.l2() = a * v1[3] + b * v2[3];
-    x.cost() = 0.0;
-    varstate_zero_m(x);
-    return x;
+__host__ __device__ inline double dist2_wrapped(double theta, double phi, double theta0, double phi0) {
+    const double d = theta_phi_distance_wrapped(theta, phi, theta0, phi0);
+    return d * d;
 }
 
-/// Backward RK4 (physics only) from x(T). If `out_traj_flat` is non-null, length is 4 * num_intervals (MS node values).
-/// Returns wrapped (theta,phi) distance to (theta_init, phi_init) at t=0.
-__host__ __device__ inline double backward_ivp_to_ms_guess(const SystemParams &sys, double dt, int num_intervals,
-                                                           int steps_per_interval, double a, double b,
-                                                           const double v1[4], const double v2[4],
-                                                           double *out_traj_flat) {
+/// Small state near origin: linear combination of two stable 4-vectors (columns).
+__host__ __device__ inline void origin_patch_state(double a, double b, const double col0[4], const double col1[4],
+                                                   VarState &x) {
+    x.theta() = col0[0] * a + col1[0] * b;
+    x.phi() = col0[1] * a + col1[1] * b;
+    x.l1() = col0[2] * a + col1[2] * b;
+    x.l2() = col0[3] * a + col1[3] * b;
+    x.cost() = 0.0;
+    varstate_zero_m(x);
+}
+
+/// Physics-only backward IVP from origin patch; optional MS knot subsampling (length `4 * num_intervals`).
+/// Returns wrapped (theta,phi) distance to `(target_th, target_ph)`.
+__host__ __device__ inline double origin_patch_backward_to_targets(const SystemParams &sys_for_alpha, double dt,
+                                                                 int num_intervals, int steps_per_interval,
+                                                                 double a, double b, const double col0[4],
+                                                                 const double col1[4], double target_th,
+                                                                 double target_ph, double *out_traj_flat) {
     const int total_steps = num_intervals * steps_per_interval;
-    VarState x = make_terminal_state(sys, a, b, v1, v2);
+    VarState x;
+    origin_patch_state(a, b, col0, col1, x);
 
     for (int s = 1; s <= total_steps; ++s) {
-        x = rk4_step_physics_only(x, sys, -dt);
+        x = rk4_step_physics_only(x, sys_for_alpha, -dt);
 
         if (out_traj_flat != nullptr) {
             for (int k = 0; k < num_intervals; ++k) {
@@ -88,23 +92,15 @@ __host__ __device__ inline double backward_ivp_to_ms_guess(const SystemParams &s
         }
     }
 
-    return theta_phi_distance_wrapped(x.theta(), x.phi(), sys.theta_init, sys.phi_init);
+    return theta_phi_distance_wrapped(x.theta(), x.phi(), target_th, target_ph);
 }
 
-__host__ __device__ inline int total_seed_count() { return kRGridCount * kABGridSize * kABGridSize; }
-
-__host__ __device__ inline void decode_seed_index(int seed, int &ir, int &ia, int &ib) {
-    ib = seed % kABGridSize;
-    seed /= kABGridSize;
-    ia = seed % kABGridSize;
-    seed /= kABGridSize;
-    ir = seed;
-}
-
-__host__ __device__ inline void ab_from_grid(int ia, int ib, double r, double &a, double &b) {
-    const double g = static_cast<double>(kABGridSize - 1);
-    a = -r + (2.0 * r) * (static_cast<double>(ia) / g);
-    b = -r + (2.0 * r) * (static_cast<double>(ib) / g);
+__host__ __device__ inline void patch_ab_from_ij(int i, int j, double radius, double &a, double &b) {
+    const double g = static_cast<double>(kPatchGrid - 1);
+    const double xi = -1.0 + 2.0 * static_cast<double>(i) / g;
+    const double xj = -1.0 + 2.0 * static_cast<double>(j) / g;
+    a = radius * xi;
+    b = radius * xj;
 }
 
 } // namespace warm_start

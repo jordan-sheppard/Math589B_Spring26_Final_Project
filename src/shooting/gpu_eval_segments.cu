@@ -11,10 +11,13 @@ __global__ void multiple_shooting_kernel(DeviceArrays d, SystemParams sys_params
     }
 
     VarState initial_guess;
-    initial_guess.theta() = d.node_guesses[k * 4 + 0];
-    initial_guess.phi() = d.node_guesses[k * 4 + 1];
-    initial_guess.l1() = d.node_guesses[k * 4 + 2];
-    initial_guess.l2() = d.node_guesses[k * 4 + 3];
+    const int N = sys_params.num_shooting_intervals;
+    const int base =
+        (int_params.backward_time && k < N - 1) ? ((k + 1) * 4) : (k * 4);
+    initial_guess.theta() = d.node_guesses[base + 0];
+    initial_guess.phi() = d.node_guesses[base + 1];
+    initial_guess.l1() = d.node_guesses[base + 2];
+    initial_guess.l2() = d.node_guesses[base + 3];
 
     SegmentEvaluation result = simulate_segment(initial_guess, sys_params, int_params);
 

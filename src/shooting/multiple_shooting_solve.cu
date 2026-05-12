@@ -84,6 +84,7 @@ std::vector<double> compute_linear_initial_guess(const SystemParams &sys_params)
 
 OptimizationResult solve_multiple_shooting(SystemParams sys_params, IntegratorParams int_params,
                                            NewtonParams newton_params) {
+    int_params.backward_time = false;
     std::vector<double> initial_guess = compute_linear_initial_guess(sys_params);
 
     return solve_multiple_shooting(initial_guess, sys_params, int_params, newton_params);

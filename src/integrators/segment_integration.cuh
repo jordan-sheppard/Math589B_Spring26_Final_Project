@@ -35,6 +35,18 @@ __host__ __device__ inline VarState rk4_step(const VarState &current, const Syst
     return next_state;
 }
 
+__host__ __device__ inline VarState rk4_step_flow(const VarState &current, const SystemParams &params, double dt,
+                                                  double flow_sign) {
+    const double half_dt = 0.5 * dt;
+
+    VarState k1 = get_derivatives_flow(current, params, flow_sign);
+    VarState k2 = get_derivatives_flow(current + (k1 * half_dt), params, flow_sign);
+    VarState k3 = get_derivatives_flow(current + (k2 * half_dt), params, flow_sign);
+    VarState k4 = get_derivatives_flow(current + (k3 * dt), params, flow_sign);
+
+    return current + (k1 + k2 * 2.0 + k3 * 2.0 + k4) * (dt / 6.0);
+}
+
 __host__ __device__ inline SegmentEvaluation simulate_segment(const VarState &initial_guess,
                                                               const SystemParams &sys_params,
                                                               const IntegratorParams &int_params) {
@@ -56,8 +68,10 @@ __host__ __device__ inline SegmentEvaluation simulate_segment(const VarState &in
 
     double init_H = compute_hamiltonian(current_state, sys_params);
 
+    const double flow_sign = int_params.backward_time ? -1.0 : 1.0;
+
     for (int step = 0; step < int_params.num_steps; step++) {
-        current_state = rk4_step(current_state, sys_params, int_params.dt);
+        current_state = rk4_step_flow(current_state, sys_params, int_params.dt, flow_sign);
     }
 
     SegmentEvaluation result;

@@ -113,6 +113,7 @@ struct SystemParams {
 struct IntegratorParams {
     double dt;
     int num_steps;
+    bool backward_time;
 };
 
 struct NewtonParams {

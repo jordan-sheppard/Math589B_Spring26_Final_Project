@@ -2,13 +2,15 @@
 
 #include <vector>
 
+#include "core/solver_types.cuh"
+
 #define EIGEN_NO_CUDA
 #define EIGEN_DONT_VECTORIZE
 #include <Eigen/Sparse>
 #include <Eigen/Dense>
 
-void build_global_system(const HDArrays &solver_arrays, const SystemParams &sys_params, SparseMat &J,
-                         VectorXd &F) {
+void build_global_system(const HDArrays &solver_arrays, const SystemParams &sys_params,
+                         const IntegratorParams &int_params, SparseMat &J, VectorXd &F) {
     const int NUM_ROWS_PER_SEGMENT = 4;
     const double FINAL_THETA_DESIRED = sys_params.theta_goal;
     const double FINAL_PHI_DESIRED = sys_params.phi_goal;
@@ -28,25 +30,48 @@ void build_global_system(const HDArrays &solver_arrays, const SystemParams &sys_
 
         const VarState &current_end_state = solver_arrays.h_segment_results[segment].final_state;
 
-        double next_theta_start_guess = solver_arrays.h_node_guesses[next_row_offset + 0];
-        double next_phi_start_guess = solver_arrays.h_node_guesses[next_row_offset + 1];
-        double next_l1_start_guess = solver_arrays.h_node_guesses[next_row_offset + 2];
-        double next_l2_start_guess = solver_arrays.h_node_guesses[next_row_offset + 3];
+        if (!int_params.backward_time) {
+            double next_theta_start_guess = solver_arrays.h_node_guesses[next_row_offset + 0];
+            double next_phi_start_guess = solver_arrays.h_node_guesses[next_row_offset + 1];
+            double next_l1_start_guess = solver_arrays.h_node_guesses[next_row_offset + 2];
+            double next_l2_start_guess = solver_arrays.h_node_guesses[next_row_offset + 3];
 
-        F(curr_row_offset + 0) = current_end_state.theta() - next_theta_start_guess;
-        F(curr_row_offset + 1) = current_end_state.phi() - next_phi_start_guess;
-        F(curr_row_offset + 2) = current_end_state.l1() - next_l1_start_guess;
-        F(curr_row_offset + 3) = current_end_state.l2() - next_l2_start_guess;
+            F(curr_row_offset + 0) = current_end_state.theta() - next_theta_start_guess;
+            F(curr_row_offset + 1) = current_end_state.phi() - next_phi_start_guess;
+            F(curr_row_offset + 2) = current_end_state.l1() - next_l1_start_guess;
+            F(curr_row_offset + 3) = current_end_state.l2() - next_l2_start_guess;
 
-        for (int r = 0; r < 4; r++) {
-            for (int c = 0; c < 4; c++) {
-                triplets.push_back(Eigen::Triplet<double>(
-                    curr_row_offset + r, curr_row_offset + c, current_end_state.M(r, c)));
+            for (int r = 0; r < 4; r++) {
+                for (int c = 0; c < 4; c++) {
+                    triplets.push_back(Eigen::Triplet<double>(
+                        curr_row_offset + r, curr_row_offset + c, current_end_state.M(r, c)));
+                }
             }
-        }
 
-        for (int i = 0; i < 4; i++) {
-            triplets.push_back(Eigen::Triplet<double>(curr_row_offset + i, next_row_offset + i, -1.0));
+            for (int i = 0; i < 4; i++) {
+                triplets.push_back(Eigen::Triplet<double>(curr_row_offset + i, next_row_offset + i, -1.0));
+            }
+        } else {
+            double left_theta = solver_arrays.h_node_guesses[curr_row_offset + 0];
+            double left_phi = solver_arrays.h_node_guesses[curr_row_offset + 1];
+            double left_l1 = solver_arrays.h_node_guesses[curr_row_offset + 2];
+            double left_l2 = solver_arrays.h_node_guesses[curr_row_offset + 3];
+
+            F(curr_row_offset + 0) = current_end_state.theta() - left_theta;
+            F(curr_row_offset + 1) = current_end_state.phi() - left_phi;
+            F(curr_row_offset + 2) = current_end_state.l1() - left_l1;
+            F(curr_row_offset + 3) = current_end_state.l2() - left_l2;
+
+            for (int r = 0; r < 4; r++) {
+                for (int c = 0; c < 4; c++) {
+                    triplets.push_back(Eigen::Triplet<double>(
+                        curr_row_offset + r, next_row_offset + c, current_end_state.M(r, c)));
+                }
+            }
+
+            for (int i = 0; i < 4; i++) {
+                triplets.push_back(Eigen::Triplet<double>(curr_row_offset + i, curr_row_offset + i, -1.0));
+            }
         }
     }
 

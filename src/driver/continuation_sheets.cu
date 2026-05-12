@@ -30,6 +30,7 @@ Result solve(double target_theta, double target_phi, double alpha) {
     IntegratorParams int_params;
     int_params.dt = INTEGRATION_DT;
     int_params.num_steps = NUM_INTEGRATION_STEPS;
+    int_params.backward_time = false;
 
     NewtonParams newton_params;
     newton_params.max_iterations = MAX_NEWTON_ITERATIONS;
@@ -58,12 +59,34 @@ Result solve(double target_theta, double target_phi, double alpha) {
         candidate_params.theta_init = current_s * target_theta;
         candidate_params.phi_init = current_s * target_phi;
 
-        std::vector<double> active_trajectory = compute_backward_eigen_ms_warm_start(candidate_params, int_params);
-        if (active_trajectory.empty()) {
-            active_trajectory = compute_linear_initial_guess(candidate_params);
+        constexpr int kWarmTop = 12;
+        std::vector<std::vector<double>> warm_list =
+            compute_patch_topk_ms_warm_starts(candidate_params, int_params, kWarmTop);
+
+        IntegratorParams int_bwd = int_params;
+        int_bwd.backward_time = true;
+
+        OptimizationResult last_success{};
+        last_success.success = false;
+        std::vector<double> active_trajectory = compute_linear_initial_guess(candidate_params);
+
+        for (const std::vector<double> &seed_traj : warm_list) {
+            std::vector<double> traj = seed_traj;
+            OptimizationResult res =
+                solve_multiple_shooting(traj, candidate_params, int_bwd, newton_params);
+            if (res.success) {
+                if (!last_success.success || res.r.optimal_cost < last_success.r.optimal_cost) {
+                    last_success = res;
+                    active_trajectory = traj;
+                }
+            }
         }
-        OptimizationResult last_success =
-            solve_multiple_shooting(active_trajectory, candidate_params, int_params, newton_params);
+
+        if (!last_success.success) {
+            active_trajectory = compute_linear_initial_guess(candidate_params);
+            last_success =
+                solve_multiple_shooting(active_trajectory, candidate_params, int_params, newton_params);
+        }
 
         if (!last_success.success) {
             // std::printf("Failed to converge on the initial seed for wrap=%d!\n", wrap);

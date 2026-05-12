@@ -4,7 +4,9 @@
 
 #include "core/solver_types.cuh"
 
-/// GPU sweep of backward physics-only RK4 trajectories from terminal eigen-combo seeds; returns MS flat
-/// guess (size `4 * num_shooting_intervals`) subsampled from the best seed by wrapped (theta,phi) mismatch at t=0.
-/// Returns empty vector if Eigen basis fails, CUDA fails, or no finite score was produced.
-std::vector<double> compute_backward_eigen_ms_warm_start(const SystemParams &sys, const IntegratorParams &int_params);
+/// Multi-well GPU patch search (origin stable plane, dense radii / 49×49 grid) plus subsampled MS guesses.
+/// Returns up to `top_k` flat trajectories (`4 * num_shooting_intervals` each), ordered by increasing GPU score
+/// (wrapped (theta,phi) distance to the well-shifted target). Empty if Eigen/CUDA failure.
+std::vector<std::vector<double>> compute_patch_topk_ms_warm_starts(const SystemParams &sys,
+                                                                   const IntegratorParams &int_params,
+                                                                   int top_k = 12);

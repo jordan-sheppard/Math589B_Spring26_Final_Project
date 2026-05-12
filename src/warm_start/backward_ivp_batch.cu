@@ -1,9 +1,9 @@
 #include "warm_start/backward_ivp_warmstart.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstdio>
+#include <numeric>
 #include <vector>
 
 #define EIGEN_NO_CUDA
@@ -14,44 +14,13 @@
 #include "cuda/gpu_macros.cuh"
 #include "warm_start/backward_ivp_common.cuh"
 
-__constant__ double c_ws_v1[4];
-__constant__ double c_ws_v2[4];
-
 namespace {
 
-bool fill_log_radii(double *out, int n) {
-    if (n <= 0) {
-        return false;
-    }
-    const double lo = 1e-10;
-    const double hi = 1e-3;
-    if (n == 1) {
-        out[0] = hi;
-        return true;
-    }
-    for (int i = 0; i < n; ++i) {
-        const double t = static_cast<double>(i) / static_cast<double>(n - 1);
-        out[i] = std::exp(std::log(lo) + t * (std::log(hi) - std::log(lo)));
-    }
-    return true;
+void fill_linearization_at_origin(double alpha, Eigen::Matrix4d &A) {
+    A << 0.0, 1.0, 0.0, 0.0, 1.0, -alpha, 0.0, -1.0, -1.0, 0.0, 0.0, -1.0, 0.0, -1.0, -1.0, alpha;
 }
 
-/// Two independent directions for the two eigenvalues with smallest real part (stable subspace approximation).
-bool compute_stable_plane_vectors(const SystemParams &sys, double v1[4], double v2[4]) {
-    VarState eq;
-    eq.theta() = sys.theta_goal;
-    eq.phi() = sys.phi_goal;
-    eq.l1() = 0.0;
-    eq.l2() = 0.0;
-
-    Mat4x4 AJ = compute_sensitivity_jacobian(eq, sys);
-    Eigen::Matrix4d A;
-    for (int r = 0; r < 4; ++r) {
-        for (int c = 0; c < 4; ++c) {
-            A(r, c) = AJ(r, c);
-        }
-    }
-
+bool stable_columns_from_A(const Eigen::Matrix4d &A, double col0[4], double col1[4]) {
     Eigen::EigenSolver<Eigen::Matrix4d> es(A);
     if (es.info() != Eigen::Success) {
         return false;
@@ -123,103 +92,182 @@ bool compute_stable_plane_vectors(const SystemParams &sys, double v1[4], double 
         return false;
     }
     for (int k = 0; k < 4; ++k) {
-        v1[k] = u0[k];
-        v2[k] = u1[k];
+        col0[k] = u0[k];
+        col1[k] = u1[k];
     }
     return true;
 }
 
-__global__ void backward_warm_start_score_kernel(SystemParams sys, double dt, int num_intervals, int steps_per_interval,
-                                                 const double *r_tab, double *scores) {
-    const int seed = blockIdx.x * blockDim.x + threadIdx.x;
-    const int total = warm_start::total_seed_count();
-    if (seed >= total) {
+void build_well_shifts(double theta_init, std::vector<int> &out) {
+    const double two_pi = 2.0 * acos(-1.0);
+    const int k_round = static_cast<int>(std::lround(theta_init / two_pi));
+    const int arr[] = {k_round, 0, k_round - 1, k_round + 1, k_round - 2, k_round + 2};
+    out.clear();
+    for (int k : arr) {
+        if (std::find(out.begin(), out.end(), k) == out.end()) {
+            out.push_back(k);
+        }
+    }
+}
+
+__constant__ double c_patch_col0[4];
+__constant__ double c_patch_col1[4];
+
+__global__ void patch_score_kernel(double *scores, SystemParams sys_alpha_only, int n_wells, const int *d_wells,
+                                   int n_rad, const double *d_radii, double theta_init_base, double phi_init_base,
+                                   double dt, int num_intervals, int steps_per_interval) {
+    const int grid_n = warm_start::kPatchGrid;
+    const int nij = grid_n * grid_n;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = n_wells * n_rad * nij;
+    if (idx >= total) {
         return;
     }
 
-    int ir = 0;
-    int ia = 0;
-    int ib = 0;
-    warm_start::decode_seed_index(seed, ir, ia, ib);
-    const double r = r_tab[ir];
+    int tmp = idx;
+    const int ij = tmp % nij;
+    tmp /= nij;
+    const int ir = tmp % n_rad;
+    tmp /= n_rad;
+    const int iw = tmp;
+
+    const int j = ij % grid_n;
+    const int i = ij / grid_n;
+    const double radius = d_radii[ir];
     double a = 0.0;
     double b = 0.0;
-    warm_start::ab_from_grid(ia, ib, r, a, b);
+    warm_start::patch_ab_from_ij(i, j, radius, a, b);
 
-    scores[seed] = warm_start::backward_ivp_to_ms_guess(sys, dt, num_intervals, steps_per_interval, a, b, c_ws_v1,
-                                                         c_ws_v2, nullptr);
+    const double two_pi = 6.28318530717958647692;
+    const double theta_tgt = theta_init_base - two_pi * static_cast<double>(d_wells[iw]);
+
+    VarState x;
+    warm_start::origin_patch_state(a, b, c_patch_col0, c_patch_col1, x);
+
+    const int total_steps = num_intervals * steps_per_interval;
+    int ok = 1;
+    for (int s = 1; s <= total_steps; ++s) {
+        x = warm_start::rk4_step_physics_only(x, sys_alpha_only, -dt);
+        if (!isfinite(x.theta()) || !isfinite(x.phi()) || !isfinite(x.l1()) || !isfinite(x.l2()) ||
+            fabs(x.theta()) > 1.0e9 || fabs(x.phi()) > 1.0e9 || fabs(x.l1()) > 1.0e9 || fabs(x.l2()) > 1.0e9) {
+            ok = 0;
+            break;
+        }
+    }
+
+    if (ok) {
+        scores[idx] = warm_start::dist2_wrapped(x.theta(), x.phi(), theta_tgt, phi_init_base);
+    } else {
+        scores[idx] = 1.0e300;
+    }
+}
+
+void decode_patch_index(int idx, int grid_n, int n_rad, int &iw, int &ir, int &i, int &j) {
+    const int nij = grid_n * grid_n;
+    int tmp = idx;
+    const int ij = tmp % nij;
+    tmp /= nij;
+    ir = tmp % n_rad;
+    tmp /= n_rad;
+    iw = tmp;
+    j = ij % grid_n;
+    i = ij / grid_n;
 }
 
 } // namespace
 
-std::vector<double> compute_backward_eigen_ms_warm_start(const SystemParams &sys, const IntegratorParams &int_params) {
-    double v1[4];
-    double v2[4];
-    if (!compute_stable_plane_vectors(sys, v1, v2)) {
-        return {};
+std::vector<std::vector<double>> compute_patch_topk_ms_warm_starts(const SystemParams &sys,
+                                                                   const IntegratorParams &int_params,
+                                                                   int top_k) {
+    std::vector<std::vector<double>> out;
+
+    double col0[4];
+    double col1[4];
+    Eigen::Matrix4d A;
+    fill_linearization_at_origin(sys.alpha, A);
+    if (!stable_columns_from_A(A, col0, col1)) {
+        return out;
     }
 
     const int N = sys.num_shooting_intervals;
     const int steps = int_params.num_steps;
-    if (N <= 0 || steps <= 0) {
-        return {};
+    if (N <= 0 || steps <= 0 || top_k <= 0) {
+        return out;
     }
 
-    std::array<double, warm_start::kRGridCount> r_host{};
-    if (!fill_log_radii(r_host.data(), warm_start::kRGridCount)) {
-        return {};
-    }
+    std::vector<int> wells;
+    build_well_shifts(sys.theta_init, wells);
+    const int n_wells = static_cast<int>(wells.size());
+    const int grid_n = warm_start::kPatchGrid;
+    const int nij = grid_n * grid_n;
 
-    const int num_seeds = warm_start::total_seed_count();
+    static const double kRadiiHost[] = {1.0e-10, 3.0e-10, 1.0e-9,  3.0e-9,  1.0e-8,  3.0e-8, 1.0e-7,  3.0e-7,
+                                        1.0e-6,  3.0e-6,  1.0e-5,  3.0e-5,  1.0e-4,  3.0e-4,  1.0e-3};
+    const int n_rad = static_cast<int>(sizeof(kRadiiHost) / sizeof(kRadiiHost[0]));
 
+    const int total = n_wells * n_rad * nij;
+
+    SystemParams sys_kernel = sys;
+    sys_kernel.theta_init = 0.0;
+    sys_kernel.phi_init = 0.0;
+    sys_kernel.theta_goal = 0.0;
+    sys_kernel.phi_goal = 0.0;
+    sys_kernel.num_shooting_intervals = N;
+
+    int *d_wells = nullptr;
+    double *d_radii = nullptr;
     double *d_scores = nullptr;
-    double *d_r_tab = nullptr;
-    gpuErrchk(cudaMalloc(&d_scores, static_cast<size_t>(num_seeds) * sizeof(double)));
-    gpuErrchk(cudaMalloc(&d_r_tab, static_cast<size_t>(warm_start::kRGridCount) * sizeof(double)));
-    gpuErrchk(cudaMemcpy(d_r_tab, r_host.data(), warm_start::kRGridCount * sizeof(double), cudaMemcpyHostToDevice));
-    gpuErrchk(cudaMemcpyToSymbol(c_ws_v1, v1, sizeof(double) * 4));
-    gpuErrchk(cudaMemcpyToSymbol(c_ws_v2, v2, sizeof(double) * 4));
+    gpuErrchk(cudaMalloc(&d_wells, static_cast<size_t>(n_wells) * sizeof(int)));
+    gpuErrchk(cudaMalloc(&d_radii, static_cast<size_t>(n_rad) * sizeof(double)));
+    gpuErrchk(cudaMalloc(&d_scores, static_cast<size_t>(total) * sizeof(double)));
+    gpuErrchk(cudaMemcpy(d_wells, wells.data(), static_cast<size_t>(n_wells) * sizeof(int), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_radii, kRadiiHost, static_cast<size_t>(n_rad) * sizeof(double), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpyToSymbol(c_patch_col0, col0, sizeof(double) * 4));
+    gpuErrchk(cudaMemcpyToSymbol(c_patch_col1, col1, sizeof(double) * 4));
 
     const int threads = 256;
-    const int blocks = (num_seeds + threads - 1) / threads;
-    backward_warm_start_score_kernel<<<blocks, threads>>>(sys, int_params.dt, N, steps, d_r_tab, d_scores);
+    const int blocks = (total + threads - 1) / threads;
+    patch_score_kernel<<<blocks, threads>>>(d_scores, sys_kernel, n_wells, d_wells, n_rad, d_radii, sys.theta_init,
+                                              sys.phi_init, int_params.dt, N, steps);
     gpuErrchk(cudaPeekAtLastError());
     gpuErrchk(cudaDeviceSynchronize());
 
-    std::vector<double> h_scores(static_cast<size_t>(num_seeds));
-    gpuErrchk(cudaMemcpy(h_scores.data(), d_scores, static_cast<size_t>(num_seeds) * sizeof(double),
+    std::vector<double> h_scores(static_cast<size_t>(total));
+    gpuErrchk(cudaMemcpy(h_scores.data(), d_scores, static_cast<size_t>(total) * sizeof(double),
                          cudaMemcpyDeviceToHost));
     gpuErrchk(cudaFree(d_scores));
-    gpuErrchk(cudaFree(d_r_tab));
+    gpuErrchk(cudaFree(d_radii));
+    gpuErrchk(cudaFree(d_wells));
 
-    int best_seed = -1;
-    double best = std::numeric_limits<double>::infinity();
-    for (int s = 0; s < num_seeds; ++s) {
-        const double sc = h_scores[static_cast<size_t>(s)];
-        if (!std::isfinite(sc)) {
-            continue;
-        }
-        if (sc < best) {
-            best = sc;
-            best_seed = s;
-        }
+    std::vector<int> order(static_cast<size_t>(total));
+    std::iota(order.begin(), order.end(), 0);
+    const int k_take = std::min(top_k, total);
+    std::partial_sort(order.begin(), order.begin() + k_take, order.end(), [&](int a, int b) {
+        return h_scores[static_cast<size_t>(a)] < h_scores[static_cast<size_t>(b)];
+    });
+
+    SystemParams sys_alpha = sys_kernel;
+    sys_alpha.alpha = sys.alpha;
+
+    for (int t = 0; t < k_take; ++t) {
+        const int idx = order[static_cast<size_t>(t)];
+        int iw = 0;
+        int ir = 0;
+        int ii = 0;
+        int jj = 0;
+        decode_patch_index(idx, grid_n, n_rad, iw, ir, ii, jj);
+        const double radius = kRadiiHost[ir];
+        double a = 0.0;
+        double b = 0.0;
+        warm_start::patch_ab_from_ij(ii, jj, radius, a, b);
+        const double two_pi = 2.0 * acos(-1.0);
+        const double theta_tgt = sys.theta_init - two_pi * static_cast<double>(wells[static_cast<size_t>(iw)]);
+
+        std::vector<double> traj(static_cast<size_t>(4 * N));
+        warm_start::origin_patch_backward_to_targets(sys_alpha, int_params.dt, N, steps, a, b, col0, col1, theta_tgt,
+                                                      sys.phi_init, traj.data());
+        out.push_back(std::move(traj));
     }
 
-    if (best_seed < 0 || !std::isfinite(best)) {
-        return {};
-    }
-
-    int ir = 0;
-    int ia = 0;
-    int ib = 0;
-    warm_start::decode_seed_index(best_seed, ir, ia, ib);
-    const double r = r_host[static_cast<size_t>(ir)];
-    double a = 0.0;
-    double b = 0.0;
-    warm_start::ab_from_grid(ia, ib, r, a, b);
-
-    std::vector<double> traj(static_cast<size_t>(4 * N));
-    warm_start::backward_ivp_to_ms_guess(sys, int_params.dt, N, steps, a, b, v1, v2, traj.data());
-
-    return traj;
+    return out;
 }

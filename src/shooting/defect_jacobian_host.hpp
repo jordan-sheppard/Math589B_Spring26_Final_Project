@@ -4,5 +4,5 @@
 #include "core/solver_host_types.hpp"
 #include "core/solver_types.cuh"
 
-void build_global_system(const HDArrays &solver_arrays, const SystemParams &sys_params, SparseMat &J,
-                         VectorXd &F);
+void build_global_system(const HDArrays &solver_arrays, const SystemParams &sys_params,
+                         const IntegratorParams &int_params, SparseMat &J, VectorXd &F);

@@ -77,3 +77,20 @@ __host__ __device__ inline VarState get_derivatives(const VarState &state, const
 
     return ds;
 }
+
+/// `flow_sign = +1` forward time; `-1` backward time (negate ODE and variational block).
+__host__ __device__ inline VarState get_derivatives_flow(const VarState &state, const SystemParams &params,
+                                                         double flow_sign) {
+    VarState ds;
+    compute_state_physics(state, params, ds);
+    ds.theta() *= flow_sign;
+    ds.phi() *= flow_sign;
+    ds.l1() *= flow_sign;
+    ds.l2() *= flow_sign;
+    ds.cost() *= flow_sign;
+
+    Mat4x4 A = compute_sensitivity_jacobian(state, params);
+    ds.M = (flow_sign * 1.0) * (A * state.M);
+
+    return ds;
+}

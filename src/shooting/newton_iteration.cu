@@ -19,7 +19,7 @@ IterationLog compute_newton_step(HDArrays &solver_arrays, const SystemParams &sy
 
     SparseMat J;
     VectorXd F;
-    build_global_system(solver_arrays, sys_params, J, F);
+    build_global_system(solver_arrays, sys_params, int_params, J, F);
 
     Eigen::SparseLU<SparseMat> solver;
 
