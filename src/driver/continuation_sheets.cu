@@ -14,12 +14,15 @@ Result solve(double target_theta, double target_phi, double alpha) {
     }
 
     const int NUM_SHOOTING_INTERVALS = 20;
+    // Truncated-horizon length and RK density aligned with the course reference (T≈16, ~2600 steps/trajectory).
+    const double TOTAL_HORIZON = 16.0;
+    const int NUM_INTEGRATION_STEPS = 128;
+    const double INTEGRATION_DT =
+        TOTAL_HORIZON /
+        (static_cast<double>(NUM_SHOOTING_INTERVALS) * static_cast<double>(NUM_INTEGRATION_STEPS));
 
-    const double INTEGRATION_DT = 0.025;
-    const int NUM_INTEGRATION_STEPS = 10;
-
-    const int MAX_NEWTON_ITERATIONS = 15;
-    const double NEWTON_TOL = 1e-6;
+    const int MAX_NEWTON_ITERATIONS = 25;
+    const double NEWTON_TOL = 1e-9;
 
     const double MIN_CONTINUATION_STEP_SIZE = 1e-4;
     const int MAX_THETA_WRAPS = 1;
