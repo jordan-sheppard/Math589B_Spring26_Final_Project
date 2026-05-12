@@ -1,295 +1,139 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
-#include "backward_manifold_seed.hpp"
+#include "core/manifold_seed.hpp"
 #include "core/solver_debug.hpp"
 #include "core/solver_types.cuh"
-#include "shooting/multiple_shooting_solve.hpp"
+#include "shooting/patch_refine_newton.hpp"
+#include "shooting/stable_patch_grid.hpp"
+
+namespace {
+constexpr double two_pi() { return 6.283185307179586476925286766559; }
+}  // namespace
 
 Result solve(double target_theta, double target_phi, double alpha) {
-    const int NUM_SHOOTING_INTERVALS = 20;
+    // Settings (tuned later; start deterministic).
+    StablePatchGridSettings gs;
+    gs.wells_half_span = 2;
+    gs.grid_n = 33;
+    gs.grid_radius = 1e-2;
+    gs.back_steps = 2000;
+    gs.back_dt = 1e-3;
+    gs.top_k_per_well = 16;
 
-    const double INTEGRATION_DT = 0.025;
-    const int NUM_INTEGRATION_STEPS = 10;
+    StablePatchNewtonSettings ns;
+    ns.max_iters = 20;
+    ns.tol = 1e-8;
+    ns.fd_eps = 1e-5;
+    ns.backtrack_max = 12;
+    ns.step_clip = 2.0;
 
-    const int MAX_NEWTON_ITERATIONS = 25;
-    const double NEWTON_TOL = 1e-6;
+    SystemParams sys;
+    sys.alpha = alpha;
+    sys.theta_init = target_theta;
+    sys.phi_init = target_phi;
+    sys.theta_goal = 0.0;  // not used by this pipeline (we use wells_k explicitly)
+    sys.phi_goal = 0.0;
+    sys.num_shooting_intervals = 0;
 
-    const double MIN_CONTINUATION_STEP_SIZE = 1e-4;
-    const double TWO_PI = 2.0 * acos(-1.0);
+    const bool dbg = math589_solver_debug_enabled();
 
-    SystemParams sys_params;
-    sys_params.alpha = alpha;
-    sys_params.theta_init = target_theta;
-    sys_params.phi_init = target_phi;
-    sys_params.num_shooting_intervals = NUM_SHOOTING_INTERVALS;
-    sys_params.phi_goal = 0.0;
-
-    IntegratorParams int_params;
-    int_params.dt = INTEGRATION_DT;
-    int_params.num_steps = NUM_INTEGRATION_STEPS;
-    int_params.use_dp5 = false;
-
-    NewtonParams newton_params;
-    newton_params.max_iterations = MAX_NEWTON_ITERATIONS;
-    newton_params.tolerance = NEWTON_TOL;
-    newton_params.lm_mu_initial = 1e-4;
-    newton_params.lm_mu_increase = 10.0;
-    newton_params.lm_mu_decrease = 0.5;
-    newton_params.lm_mu_min = 1e-14;
-    newton_params.lm_mu_max = 1e10;
-    newton_params.lm_max_subiterations = 15;
-    newton_params.max_delta_norm = 5e2;
-    newton_params.backtrack_max = 10;
-
-    Result best_result;
-    bool found_best = false;
-    double best_cost = 1e300;
-    int best_wrap = 0;
-    bool found_fallback = false;
-    double best_fallback_err = 1e300;
-    Result best_fallback_result;
-
-    const int center_wrap = (int)std::lround(target_theta / TWO_PI);
-    const int span =
-        std::max(3, std::min(16, 3 + (int)std::ceil(std::abs(target_phi) * 0.45)));
-    std::vector<int> wrap_candidates;
-    wrap_candidates.reserve(static_cast<size_t>(2 * span + 1));
-    wrap_candidates.push_back(center_wrap);
-    for (int d = 1; d <= span; ++d) {
-        wrap_candidates.push_back(center_wrap + d);
-        wrap_candidates.push_back(center_wrap - d);
+    // Wells (angle periodicity)
+    const int k_round = static_cast<int>(std::lround(target_theta / two_pi()));
+    std::vector<int> wells;
+    for (int d = -gs.wells_half_span; d <= gs.wells_half_span; ++d) {
+        wells.push_back(k_round + d);
     }
 
-    const bool dbg_drv = math589_solver_debug_enabled();
-    const bool use_ic_homotopy = math589_ic_homotopy_enabled();
-
-    if (dbg_drv) {
-        std::fprintf(stderr,
-                     "[MATH589][DRIVER] target theta=%.10g phi=%.10g alpha=%.10g "
-                     "center_wrap=%d span=%zu candidate_wraps_total=%zu ic_homotopy=%d\n",
-                     target_theta, target_phi, alpha, center_wrap, static_cast<size_t>(span),
-                     wrap_candidates.size(), use_ic_homotopy ? 1 : 0);
+    if (dbg) {
+        std::fprintf(stderr, "[MATH589][PATCH] theta=%.10g phi=%.10g alpha=%.10g k_round=%d wells=%zu grid_n=%d back_steps=%d\n",
+                     target_theta, target_phi, alpha, k_round, wells.size(), gs.grid_n, gs.back_steps);
     }
 
-    for (int wrap : wrap_candidates) {
-        sys_params.theta_goal = static_cast<double>(wrap) * TWO_PI;
+    // Stable patch basis
+    StablePatchBasis basis;
+    stable_manifold_basis(alpha, basis.B);
 
-        if (dbg_drv) {
-            std::fprintf(stderr, "[MATH589][DRIVER] --- sheet wrap=%d theta_goal=%.10g ---\n", wrap,
-                         sys_params.theta_goal);
+    // GPU grid evaluate
+    const int num_wells = static_cast<int>(wells.size());
+    const int total = num_wells * gs.grid_n * gs.grid_n;
+    std::vector<StablePatchCandidate> cands(static_cast<size_t>(std::max(0, total)));
+    stable_patch_grid_backward_gpu(sys, basis, wells.data(), num_wells, gs, cands.data());
+
+    // Top-K per well
+    const std::vector<StablePatchCandidate> top =
+        stable_patch_topk_per_well(cands.data(), num_wells, gs.grid_n, gs.top_k_per_well);
+
+    if (dbg) {
+        int valid = 0;
+        for (const auto &c : cands) valid += (c.valid != 0);
+        std::fprintf(stderr, "[MATH589][PATCH] candidates total=%d valid=%d top=%zu\n", total, valid, top.size());
+    }
+
+    // Refine and select by cost among converged; fallback to best-by-residual.
+    bool found_conv = false;
+    StablePatchRefineOut best_conv;
+    best_conv.J = std::numeric_limits<double>::infinity();
+
+    bool found_any = false;
+    StablePatchRefineOut best_any;
+    best_any.r_inf = 1e300;
+
+    for (const auto &seed : top) {
+        StablePatchRefineOut r = refine_candidate_newton_2d(sys, basis, seed.well_k, seed.a, seed.b, ns, gs);
+        found_any = true;
+        if (r.r_inf < best_any.r_inf) {
+            best_any = r;
         }
-
-        OptimizationResult last_success;
-        last_success.success = false;
-        std::vector<double> active_trajectory;
-
-        if (use_ic_homotopy) {
-            double target_norm = std::sqrt(target_theta * target_theta + target_phi * target_phi);
-            double current_s = 1.0;
-            if (target_norm > 0.05) {
-                current_s = 0.05 / target_norm;
-            }
-            double ds = 0.1;
-
-            SystemParams candidate_params = sys_params;
-            candidate_params.theta_init = current_s * target_theta;
-            candidate_params.phi_init = current_s * target_phi;
-
-            active_trajectory = compute_linear_initial_guess(candidate_params);
-            if (dbg_drv) {
-                std::fprintf(stderr,
-                             "[MATH589][DRIVER] homotopy initial s=%.6g theta_ic=%.6g phi_ic=%.6g\n",
-                             current_s, candidate_params.theta_init, candidate_params.phi_init);
-            }
-
-            last_success =
-                solve_multiple_shooting(active_trajectory, candidate_params, int_params, newton_params);
-
-            if (!last_success.success) {
-                if (dbg_drv) {
-                    std::fprintf(stderr,
-                                 "[MATH589][DRIVER] initial MS solve FAILED wrap=%d (skip sheet)\n",
-                                 wrap);
-                }
-                continue;
-            }
-
-            while (current_s < 1.0) {
-                double next_s = std::min(current_s + ds, 1.0);
-
-                candidate_params.theta_init = next_s * target_theta;
-                candidate_params.phi_init = next_s * target_phi;
-
-                std::vector<double> candidate_trajectory = active_trajectory;
-
-                if (dbg_drv) {
-                    std::fprintf(stderr,
-                                 "[MATH589][DRIVER] homotopy try next_s=%.6g theta_ic=%.6g phi_ic=%.6g "
-                                 "ds=%.6g\n",
-                                 next_s, candidate_params.theta_init, candidate_params.phi_init, ds);
-                }
-
-                OptimizationResult result = solve_multiple_shooting(candidate_trajectory, candidate_params,
-                                                                    int_params, newton_params);
-
-                if (result.success) {
-                    current_s = next_s;
-                    active_trajectory = candidate_trajectory;
-                    last_success = result;
-
-                    if (result.num_iterations <= 4) {
-                        ds *= 1.5;
-                    }
-                } else {
-                    ds *= 0.5;
-
-                    if (dbg_drv) {
-                        std::fprintf(stderr,
-                                     "[MATH589][DRIVER] homotopy step REJECT shrink ds=%.6g "
-                                     "(MS did not converge at this next_s)\n",
-                                     ds);
-                    }
-
-                    if (ds < MIN_CONTINUATION_STEP_SIZE) {
-                        break;
-                    }
-                }
-            }
-
-            if (last_success.success) {
-                IntegratorParams polish_params = int_params;
-                polish_params.num_steps = int_params.num_steps + 6;
-
-                std::vector<double> polish_traj = active_trajectory;
-                if (dbg_drv) {
-                    std::fprintf(stderr,
-                                 "[MATH589][DRIVER] polish segments steps %d -> %d\n",
-                                 int_params.num_steps, polish_params.num_steps);
-                }
-                OptimizationResult polish_result =
-                    solve_multiple_shooting(polish_traj, candidate_params, polish_params, newton_params);
-                if (polish_result.success) {
-                    last_success = polish_result;
-                    active_trajectory = polish_traj;
-                }
-
-                if (!found_best || last_success.r.optimal_cost < best_cost) {
-                    found_best = true;
-                    best_cost = last_success.r.optimal_cost;
-                    best_wrap = wrap;
-                    best_result = last_success.r;
-                    best_result.optimal_theta_wraps = wrap;
-                    best_result.final_theta_goal = sys_params.theta_goal;
-                }
-                if (dbg_drv) {
-                    std::fprintf(stderr,
-                                 "[MATH589][DRIVER] sheet wrap=%d finished ok best_cost_so_far=%.10g "
-                                 "best_wrap_track=%d\n",
-                                 wrap, best_cost, best_wrap);
-                }
-            }
-        } else {
-            std::vector<double> cloud_guess;
-            const bool cloud_ok =
-                build_ms_guess_from_backward_cloud(sys_params, int_params, cloud_guess);
-            if (cloud_ok) {
-                active_trajectory = std::move(cloud_guess);
-            } else {
-                if (dbg_drv) {
-                    std::fprintf(stderr,
-                                 "[MATH589][DRIVER] backward cloud failed; linear guess fallback "
-                                 "wrap=%d\n",
-                                 wrap);
-                }
-                active_trajectory = compute_linear_initial_guess(sys_params);
-            }
-
-            last_success =
-                solve_multiple_shooting(active_trajectory, sys_params, int_params, newton_params);
-
-            if (!last_success.success) {
-                if (dbg_drv) {
-                    std::fprintf(stderr,
-                                 "[MATH589][DRIVER] MS solve FAILED wrap=%d (skip sheet)\n", wrap);
-                }
-                if (std::isfinite(last_success.final_error) &&
-                    last_success.final_error < best_fallback_err) {
-                    best_fallback_err = last_success.final_error;
-                    found_fallback = true;
-                    best_fallback_result = last_success.r;
-                    best_fallback_result.optimal_theta_wraps = wrap;
-                    best_fallback_result.final_theta_goal = sys_params.theta_goal;
-                    if (dbg_drv) {
-                        std::fprintf(
-                            stderr,
-                            "[MATH589][DRIVER] fallback update wrap=%d final_err=%.6e cost=%.10g\n",
-                            wrap, last_success.final_error, last_success.r.optimal_cost);
-                    }
-                }
-                continue;
-            }
-
-            IntegratorParams polish_params = int_params;
-            polish_params.num_steps = int_params.num_steps + 6;
-
-            std::vector<double> polish_traj = active_trajectory;
-            if (dbg_drv) {
-                std::fprintf(stderr,
-                             "[MATH589][DRIVER] polish segments steps %d -> %d\n", int_params.num_steps,
-                             polish_params.num_steps);
-            }
-            OptimizationResult polish_result =
-                solve_multiple_shooting(polish_traj, sys_params, polish_params, newton_params);
-            if (polish_result.success) {
-                last_success = polish_result;
-                active_trajectory = std::move(polish_traj);
-            }
-
-            if (!found_best || last_success.r.optimal_cost < best_cost) {
-                found_best = true;
-                best_cost = last_success.r.optimal_cost;
-                best_wrap = wrap;
-                best_result = last_success.r;
-                best_result.optimal_theta_wraps = wrap;
-                best_result.final_theta_goal = sys_params.theta_goal;
-            }
-            if (dbg_drv) {
-                std::fprintf(stderr,
-                             "[MATH589][DRIVER] sheet wrap=%d finished ok best_cost_so_far=%.10g "
-                             "best_wrap_track=%d\n",
-                             wrap, best_cost, best_wrap);
+        if (r.converged) {
+            if (!found_conv || r.J < best_conv.J) {
+                found_conv = true;
+                best_conv = r;
             }
         }
     }
 
-    if (!found_best) {
-        if (found_fallback) {
-            if (dbg_drv) {
-                std::fprintf(stderr,
-                             "[MATH589][DRIVER] returning FALLBACK best_nonconverged "
-                             "final_err=%.6e wrap=%d l1=%.10f l2=%.10f cost=%.10f\n",
-                             best_fallback_err, best_fallback_result.optimal_theta_wraps,
-                             best_fallback_result.optimal_l1_init, best_fallback_result.optimal_l2_init,
-                             best_fallback_result.optimal_cost);
-            }
-            return best_fallback_result;
+    Result out{};
+    if (found_conv) {
+        out.optimal_l1_init = best_conv.l1;
+        out.optimal_l2_init = best_conv.l2;
+        out.optimal_cost = best_conv.J;
+        out.optimal_theta_wraps = k_round; // informational only
+        out.final_theta_goal = two_pi() * static_cast<double>(k_round);
+        if (dbg) {
+            std::fprintf(stderr, "[MATH589][PATCH] SELECT converged r_inf=%.3e a=%.6g b=%.6g l=(%.10g,%.10g) J=%.10g\n",
+                         best_conv.r_inf, best_conv.a, best_conv.b, best_conv.l1, best_conv.l2, best_conv.J);
         }
-        if (dbg_drv) {
-            std::fprintf(stderr,
-                         "[MATH589][DRIVER] solve() returning DEFAULT (found_best=false) -> zeros\n");
-        }
-        return best_result;
+        return out;
     }
 
-    if (dbg_drv) {
-        std::fprintf(stderr,
-                     "[MATH589][DRIVER] BEST wrap=%d final_theta_goal=%.10g l1=%.10f l2=%.10f cost=%.10f\n",
-                     best_wrap, best_result.final_theta_goal, best_result.optimal_l1_init,
-                     best_result.optimal_l2_init, best_result.optimal_cost);
+    if (found_any) {
+        out.optimal_l1_init = best_any.l1;
+        out.optimal_l2_init = best_any.l2;
+        out.optimal_cost = std::isfinite(best_any.J) ? best_any.J : 0.0;
+        out.optimal_theta_wraps = k_round;
+        out.final_theta_goal = two_pi() * static_cast<double>(k_round);
+        if (dbg) {
+            std::fprintf(stderr, "[MATH589][PATCH] SELECT best_nonconverged r_inf=%.3e a=%.6g b=%.6g l=(%.10g,%.10g) J=%.10g\n",
+                         best_any.r_inf, best_any.a, best_any.b, best_any.l1, best_any.l2, best_any.J);
+        }
+        return out;
     }
 
-    return best_result;
+    // Last resort fallback: lambda ≈ P x, cost=0 (deterministic, non-zero in general).
+    double P[4];
+    stable_manifold_P(alpha, P);
+    out.optimal_l1_init = P[0] * target_theta + P[1] * target_phi;
+    out.optimal_l2_init = P[2] * target_theta + P[3] * target_phi;
+    out.optimal_cost = 0.0;
+    out.optimal_theta_wraps = k_round;
+    out.final_theta_goal = two_pi() * static_cast<double>(k_round);
+    if (dbg) {
+        std::fprintf(stderr, "[MATH589][PATCH] FALLBACK linear P seed l=(%.10g,%.10g)\n",
+                     out.optimal_l1_init, out.optimal_l2_init);
+    }
+    return out;
 }

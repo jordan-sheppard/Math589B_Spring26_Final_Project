@@ -10,13 +10,9 @@ NVCCFLAGS = -O2 -Isrc
 
 SRC = \
 	src/main.cu \
-	src/core/host_buffers.cu \
 	src/core/manifold_seed.cu \
-	src/driver/backward_manifold_seed.cu \
-	src/shooting/gpu_eval_segments.cu \
-	src/shooting/defect_jacobian_host.cu \
-	src/shooting/newton_iteration.cu \
-	src/shooting/multiple_shooting_solve.cu \
+	src/shooting/stable_patch_grid.cu \
+	src/shooting/patch_refine_newton.cu \
 	src/driver/continuation_sheets.cu
 
 # `all` loads modules first, then sets EIGEN_INC in the *same* shell (see below).

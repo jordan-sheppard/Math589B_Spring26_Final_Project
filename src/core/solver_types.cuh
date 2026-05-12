@@ -164,3 +164,54 @@ struct OptimizationResult {
     double final_error;
     Result r;
 };
+
+// ----------------------------
+// 2D stable-patch shooting types
+// ----------------------------
+
+struct StablePatchBasis {
+    // Two basis vectors B1, B2 in phase coordinates [theta, phi, l1, l2], row-major 4x2.
+    double B[8];
+};
+
+struct StablePatchGridSettings {
+    int wells_half_span = 2;      // k in [k_round - span, ..., k_round + span]
+    int grid_n = 33;              // number of points per axis in (a,b)
+    double grid_radius = 1e-2;    // (a,b) in [-r, r]^2
+    int back_steps = 2000;        // backward integrator steps
+    double back_dt = 1e-3;        // backward step size magnitude (uses -|dt|)
+    int top_k_per_well = 16;      // candidates kept for CPU refinement per well
+};
+
+struct StablePatchNewtonSettings {
+    int max_iters = 20;
+    double tol = 1e-8;            // target residual infinity norm
+    double fd_eps = 1e-5;         // finite diff step in a/b
+    int backtrack_max = 12;
+    double step_clip = 2.0;       // cap on |Δa|,|Δb|
+};
+
+struct StablePatchCandidate {
+    int well_k = 0;
+    double a = 0.0;
+    double b = 0.0;
+    // Endpoint after backward integration (phase at approximate target time)
+    double theta_end = 0.0;
+    double phi_end = 0.0;
+    double l1_end = 0.0;
+    double l2_end = 0.0;
+    double J = 0.0;
+    double d2 = 0.0;
+    int valid = 0;
+};
+
+struct StablePatchRefineOut {
+    int converged = 0;
+    int iters = 0;
+    double r_inf = 0.0;
+    double a = 0.0;
+    double b = 0.0;
+    double l1 = 0.0;
+    double l2 = 0.0;
+    double J = 0.0;
+};

@@ -1,10 +1,13 @@
-# METHODOLOGY: CUDA Multiple Shooting + Levenberg–Marquardt
+# METHODOLOGY: Stable-Patch Shooting (GPU grid + 2D Newton)
 
-This document specifies the mathematical methodology for the CUDA implementation under `src/`: parallel **multiple shooting** on the Hamiltonian flow for the course pendulum optimal-control problem, a **rectangular** residual of dimension **m = n + 2**, and **damped Gauss–Newton / Levenberg–Marquardt least squares** at each outer iteration. **Terminal manifold consistency** at the truncated horizon is enforced via **two extra scalar equations** alongside continuity and boundary matching, without row weighting or penalty parameters.
+This document specifies the methodology for the CUDA solver under `src/`. The implementation follows a **stable-manifold patch** approach:
 
-The public API is the assignment scaffold: `solve(theta, phi, alpha)` in [`src/solver.hpp`](src/solver.hpp), implemented by the driver in [`src/driver/continuation_sheets.cu`](src/driver/continuation_sheets.cu).
+- **CPU**: build a 2D stable-subspace basis \(B=[B_1\ B_2]\) of the linearized Hamiltonian flow at the upright equilibrium.
+- **GPU**: evaluate a deterministic grid of \((a,b)\) values on that patch, integrate the PMP ODE **backward** in time, and score candidates by endpoint closeness to the desired initial state (after accounting for angle wells \(k\)).
+- **CPU**: refine top candidates using a **2×2 Newton** solve in \((a,b)\) with finite-difference Jacobian and backtracking.
+- Select the best converged candidate by cost \(J\); otherwise return the best-by-residual or a linear \(P x\) fallback.
 
-**Default initialization (no IC homotopy):** for each candidate $\theta$-sheet, the driver builds a multiple-shooting warm start in [`src/driver/backward_manifold_seed.cu`](src/driver/backward_manifold_seed.cu): a small 2D grid of terminal states on the **linearized stable graph** $(\delta_\theta,\delta_\varphi,\lambda\approx P\delta)$ near the upright target for that sheet, **backward** Hamiltonian integration with a **running minimum** of squared distance (wrapped $\theta$) to the physical $(\theta_0,\varphi_0)$, then **forward** integration to fill all MS nodes. If that screening fails numerically, the driver falls back to the legacy straight-line $P$-linear guess. Set **`MATH589_IC_HOMOTOPY=1`** to restore the previous **initial-condition homotopy** path (scale $(\theta,\varphi)$ toward $0$ before stepping to the full target). See [`src/core/solver_debug.hpp`](src/core/solver_debug.hpp).
+The public API is unchanged: `solve(theta, phi, alpha)` in [`src/solver.hpp`](src/solver.hpp), implemented by [`src/driver/continuation_sheets.cu`](src/driver/continuation_sheets.cu).
 
 ---
 
@@ -67,12 +70,10 @@ $$
 
 ## 2. What we compute
 
-Given $(\theta_0,\varphi_0,\alpha)$, the executable prints three numbers:
+Given \((\theta_0,\varphi_0,\alpha)\), the executable prints three numbers:
 
-- $\lambda_1(0)$, $\lambda_2(0)$ at the **physical** initial state (after any sheet bookkeeping in the driver), and  
-- $J$, approximated by accumulating the running cost along the converged discrete trajectory on a **truncated** horizon implied by the shooting discretization.
-
-Numerically, $\lambda_1(0)$ and $\lambda_2(0)$ are the costate components at **node 0** of the multiple-shooting chain once the nonlinear least-squares problem is solved.
+- \(\lambda_1(0)\), \(\lambda_2(0)\) corresponding to the selected backward-shot trajectory whose endpoint matches \((\theta_0,\varphi_0)\) (after angle-well bookkeeping), and
+- \(J\), accumulated along the backward integration segment using the eliminated-\(u\) running cost density.
 
 ---
 
