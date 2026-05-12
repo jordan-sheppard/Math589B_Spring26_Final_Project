@@ -101,21 +101,27 @@ inline bool solve2x2(const double A[2][2], const double rhs[2], double x[2]) {
 
 std::vector<StablePatchCandidate> stable_patch_topk_per_well(const StablePatchCandidate *cands,
                                                             int num_wells,
+                                                            int num_radii,
                                                             int grid_n,
                                                             int top_k) {
     const int per_well = grid_n * grid_n;
+    const int slice = num_wells * per_well;
     std::vector<StablePatchCandidate> out;
     out.reserve(static_cast<size_t>(std::max(0, num_wells * top_k)));
 
     for (int w = 0; w < num_wells; ++w) {
-        const StablePatchCandidate *base = cands + w * per_well;
         std::vector<StablePatchCandidate> v;
-        v.reserve(static_cast<size_t>(per_well));
-        for (int i = 0; i < per_well; ++i) {
-            if (base[i].valid && std::isfinite(base[i].d2)) v.push_back(base[i]);
+        v.reserve(static_cast<size_t>(per_well * std::max(1, num_radii)));
+        for (int ri = 0; ri < num_radii; ++ri) {
+            const StablePatchCandidate *base = cands + ri * slice + w * per_well;
+            for (int i = 0; i < per_well; ++i) {
+                if (base[i].valid && std::isfinite(base[i].r_residual)) {
+                    v.push_back(base[i]);
+                }
+            }
         }
         std::sort(v.begin(), v.end(), [](const StablePatchCandidate &a, const StablePatchCandidate &b) {
-            if (a.d2 != b.d2) return a.d2 < b.d2;
+            if (a.r_residual != b.r_residual) return a.r_residual < b.r_residual;
             if (a.J != b.J) return a.J < b.J;
             const double na = std::fabs(a.a) + std::fabs(a.b);
             const double nb = std::fabs(b.a) + std::fabs(b.b);
@@ -177,22 +183,28 @@ StablePatchRefineOut refine_candidate_newton_2d(const SystemParams &sys,
             return out;
         }
 
-        // Finite difference Jacobian DR
+        // Centered finite-difference Jacobian ∂R/∂(a,b)
         const double ea = ns.fd_eps;
         const double eb = ns.fd_eps;
-        VarState ya, yb;
-        double Ja = 0.0, Jb = 0.0;
-        if (!integrate_backward_endpoint(sys, basis, well_k, a + ea, b, gs, ya, Ja)) break;
-        if (!integrate_backward_endpoint(sys, basis, well_k, a, b + eb, gs, yb, Jb)) break;
-        double Ra[2], Rb[2];
-        residual_R(sys, well_k, ya, Ra);
-        residual_R(sys, well_k, yb, Rb);
+        VarState ya_p, ya_m, yb_p, yb_m;
+        double Ja_p = 0.0, Ja_m = 0.0, Jb_p = 0.0, Jb_m = 0.0;
+        if (!integrate_backward_endpoint(sys, basis, well_k, a + ea, b, gs, ya_p, Ja_p)) break;
+        if (!integrate_backward_endpoint(sys, basis, well_k, a - ea, b, gs, ya_m, Ja_m)) break;
+        if (!integrate_backward_endpoint(sys, basis, well_k, a, b + eb, gs, yb_p, Jb_p)) break;
+        if (!integrate_backward_endpoint(sys, basis, well_k, a, b - eb, gs, yb_m, Jb_m)) break;
+        double Ra_p[2], Ra_m[2], Rb_p[2], Rb_m[2];
+        residual_R(sys, well_k, ya_p, Ra_p);
+        residual_R(sys, well_k, ya_m, Ra_m);
+        residual_R(sys, well_k, yb_p, Rb_p);
+        residual_R(sys, well_k, yb_m, Rb_m);
 
         double A[2][2];
-        A[0][0] = (Ra[0] - R[0]) / ea;
-        A[1][0] = (Ra[1] - R[1]) / ea;
-        A[0][1] = (Rb[0] - R[0]) / eb;
-        A[1][1] = (Rb[1] - R[1]) / eb;
+        const double inv2a = 1.0 / (2.0 * ea);
+        const double inv2b = 1.0 / (2.0 * eb);
+        A[0][0] = (Ra_p[0] - Ra_m[0]) * inv2a;
+        A[1][0] = (Ra_p[1] - Ra_m[1]) * inv2a;
+        A[0][1] = (Rb_p[0] - Rb_m[0]) * inv2b;
+        A[1][1] = (Rb_p[1] - Rb_m[1]) * inv2b;
 
         double rhs[2] = {-R[0], -R[1]};
         double delta[2];

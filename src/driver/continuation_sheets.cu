@@ -12,17 +12,35 @@
 
 namespace {
 constexpr double two_pi() { return 6.283185307179586476925286766559; }
+
+/// Log-spaced radii in [1e-10, 1e-3]: for each decade -10..-4 use {1×10^e, 5×10^e}, then 1e-3.
+inline void fill_default_stable_patch_radii(StablePatchGridSettings &gs) {
+    int n = 0;
+    for (int e = -10; e <= -4; ++e) {
+        const double base = std::pow(10.0, static_cast<double>(e));
+        gs.radii[n++] = base;
+        gs.radii[n++] = 5.0 * base;
+    }
+    gs.radii[n++] = 1e-3;
+    gs.num_radii = n;
+}
+
+/// Prefer lower ‖R‖∞, then lower cost J.
+inline bool refine_better_residual_first(const StablePatchRefineOut &a, const StablePatchRefineOut &b) {
+    if (a.r_inf < b.r_inf) return true;
+    if (a.r_inf > b.r_inf) return false;
+    return a.J < b.J;
+}
 }  // namespace
 
 Result solve(double target_theta, double target_phi, double alpha) {
-    // Settings (tuned later; start deterministic).
     StablePatchGridSettings gs;
     gs.wells_half_span = 2;
-    gs.grid_n = 33;
-    gs.grid_radius = 1e-2;
-    gs.back_steps = 2000;
-    gs.back_dt = 1e-3;
-    gs.top_k_per_well = 16;
+    gs.grid_n = 64;
+    gs.back_steps = 1500;
+    gs.back_dt = 18.0 / 1500.0;
+    gs.top_k_per_well = 32;
+    fill_default_stable_patch_radii(gs);
 
     StablePatchNewtonSettings ns;
     ns.max_iters = 20;
@@ -49,47 +67,59 @@ Result solve(double target_theta, double target_phi, double alpha) {
     }
 
     if (dbg) {
-        std::fprintf(stderr, "[MATH589][PATCH] theta=%.10g phi=%.10g alpha=%.10g k_round=%d wells=%zu grid_n=%d back_steps=%d\n",
-                     target_theta, target_phi, alpha, k_round, wells.size(), gs.grid_n, gs.back_steps);
+        std::fprintf(stderr,
+                     "[MATH589][PATCH] theta=%.10g phi=%.10g alpha=%.10g k_round=%d wells=%zu grid_n=%d "
+                     "num_radii=%d back_steps=%d back_dt=%.10g\n",
+                     target_theta, target_phi, alpha, k_round, wells.size(), gs.grid_n, gs.num_radii, gs.back_steps,
+                     gs.back_dt);
     }
 
     // Stable patch basis
     StablePatchBasis basis;
     stable_manifold_basis(alpha, basis.B);
 
-    // GPU grid evaluate
+    // GPU grid evaluate: one launch per search radius; concatenate [radius][well][i][j].
     const int num_wells = static_cast<int>(wells.size());
-    const int total = num_wells * gs.grid_n * gs.grid_n;
-    std::vector<StablePatchCandidate> cands(static_cast<size_t>(std::max(0, total)));
-    stable_patch_grid_backward_gpu(sys, basis, wells.data(), num_wells, gs, cands.data());
+    const int grid_total = gs.grid_n * gs.grid_n;
+    const int slice = num_wells * grid_total;
+    const int total_all = gs.num_radii * slice;
+    std::vector<StablePatchCandidate> cands(static_cast<size_t>(std::max(0, total_all)));
 
-    // Top-K per well
+    for (int ri = 0; ri < gs.num_radii; ++ri) {
+        gs.grid_radius = gs.radii[ri];
+        StablePatchCandidate *out_slice = cands.data() + ri * slice;
+        stable_patch_grid_backward_gpu(sys, basis, wells.data(), num_wells, gs, out_slice);
+    }
+
+    // Top-K per well (aggregate all radii; rank by ‖R‖∞ then J)
     const std::vector<StablePatchCandidate> top =
-        stable_patch_topk_per_well(cands.data(), num_wells, gs.grid_n, gs.top_k_per_well);
+        stable_patch_topk_per_well(cands.data(), num_wells, gs.num_radii, gs.grid_n, gs.top_k_per_well);
 
     if (dbg) {
         int valid = 0;
         for (const auto &c : cands) valid += (c.valid != 0);
-        std::fprintf(stderr, "[MATH589][PATCH] candidates total=%d valid=%d top=%zu\n", total, valid, top.size());
+        std::fprintf(stderr, "[MATH589][PATCH] candidates total=%d valid=%d top=%zu\n", total_all, valid, top.size());
     }
 
-    // Refine and select by cost among converged; fallback to best-by-residual.
+    // Refine: among converged pick best by residual then J; else best overall by residual then J.
     bool found_conv = false;
-    StablePatchRefineOut best_conv;
+    StablePatchRefineOut best_conv{};
+    best_conv.r_inf = 1e300;
     best_conv.J = std::numeric_limits<double>::infinity();
 
     bool found_any = false;
-    StablePatchRefineOut best_any;
+    StablePatchRefineOut best_any{};
     best_any.r_inf = 1e300;
+    best_any.J = std::numeric_limits<double>::infinity();
 
     for (const auto &seed : top) {
         StablePatchRefineOut r = refine_candidate_newton_2d(sys, basis, seed.well_k, seed.a, seed.b, ns, gs);
         found_any = true;
-        if (r.r_inf < best_any.r_inf) {
+        if (refine_better_residual_first(r, best_any)) {
             best_any = r;
         }
         if (r.converged) {
-            if (!found_conv || r.J < best_conv.J) {
+            if (!found_conv || refine_better_residual_first(r, best_conv)) {
                 found_conv = true;
                 best_conv = r;
             }

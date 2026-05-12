@@ -117,6 +117,25 @@ void stable_manifold_basis(double alpha, double B[8]) {
         return;
     }
 
+    // Unit-normalize each 4D column for consistent (a,b) scaling on the stable patch.
+    constexpr double k_norm_eps = 1e-14;
+    for (int c = 0; c < 2; ++c) {
+        double n2 = 0.0;
+        for (int r = 0; r < 4; ++r) {
+            n2 += W(r, c) * W(r, c);
+        }
+        const double n = std::sqrt(n2);
+        if (!(n > k_norm_eps)) {
+            for (int i = 0; i < 8; ++i) B[i] = 0.0;
+            B[0] = 1.0;
+            B[5] = 1.0;
+            return;
+        }
+        for (int r = 0; r < 4; ++r) {
+            W(r, c) /= n;
+        }
+    }
+
     // Pack as row-major 4x2: [B1 B2]
     for (int r = 0; r < 4; ++r) {
         B[r * 2 + 0] = W(r, 0);

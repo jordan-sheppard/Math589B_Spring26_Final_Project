@@ -4,10 +4,12 @@
 
 #include "core/solver_types.cuh"
 
-/// CPU-side top-K filtering by d2 per well.
-/// Input `cands` is size (num_wells * grid_n * grid_n).
+/// CPU-side top-K filtering by residual norm ‖R‖∞, then cost J, per well.
+/// Input layout: `num_radii` blocks of size (num_wells * grid_n * grid_n), each block
+/// row-major by [well][i][j] (same as one `stable_patch_grid_backward_gpu` output).
 std::vector<StablePatchCandidate> stable_patch_topk_per_well(const StablePatchCandidate *cands,
                                                             int num_wells,
+                                                            int num_radii,
                                                             int grid_n,
                                                             int top_k);
 

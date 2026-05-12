@@ -40,6 +40,12 @@ __host__ __device__ inline double d2_target(double theta_end, double phi_end, do
     return dth * dth + dph * dph;
 }
 
+__host__ __device__ inline double r_inf_target(double theta_end, double phi_end, double theta_eff, double phi_t) {
+    const double dth = theta_end - theta_eff;
+    const double dph = phi_end - phi_t;
+    return fmax(fabs(dth), fabs(dph));
+}
+
 __global__ void stable_patch_grid_kernel(SystemParams sys,
                                          StablePatchBasis basis,
                                          const int *wells_k,
@@ -86,6 +92,7 @@ __global__ void stable_patch_grid_kernel(SystemParams sys,
         c.b = b;
         c.valid = 0;
         c.d2 = 1e300;
+        c.r_residual = 1e300;
         out[tid] = c;
         return;
     }
@@ -118,6 +125,7 @@ __global__ void stable_patch_grid_kernel(SystemParams sys,
     c.J = J;
     c.valid = valid;
     c.d2 = valid ? d2_target(c.theta_end, c.phi_end, theta_eff, phi_t) : 1e300;
+    c.r_residual = valid ? r_inf_target(c.theta_end, c.phi_end, theta_eff, phi_t) : 1e300;
     out[tid] = c;
 }
 

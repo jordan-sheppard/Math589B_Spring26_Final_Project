@@ -174,13 +174,19 @@ struct StablePatchBasis {
     double B[8];
 };
 
+/// Max radii entries for multi-pass stable-patch search (host fills `radii[0..num_radii-1]`).
+static constexpr int STABLE_PATCH_MAX_RADII = 32;
+
 struct StablePatchGridSettings {
     int wells_half_span = 2;      // k in [k_round - span, ..., k_round + span]
-    int grid_n = 33;              // number of points per axis in (a,b)
+    int grid_n = 64;              // number of points per axis in (a,b)
+    /// Single-pass radius; multi-pass uses `radii[]` (kernel reads `grid_radius` each launch).
     double grid_radius = 1e-2;    // (a,b) in [-r, r]^2
-    int back_steps = 2000;        // backward integrator steps
-    double back_dt = 1e-3;        // backward step size magnitude (uses -|dt|)
-    int top_k_per_well = 16;      // candidates kept for CPU refinement per well
+    int num_radii = 1;            // number of entries in `radii` used by the driver
+    double radii[STABLE_PATCH_MAX_RADII]{};  // search radii (e.g. log-spaced); default: unset
+    int back_steps = 1500;        // backward integrator steps (n)
+    double back_dt = 18.0 / 1500.0; // magnitude; horizon T ≈ back_steps * |back_dt|
+    int top_k_per_well = 32;      // candidates kept for CPU refinement per well
 };
 
 struct StablePatchNewtonSettings {
@@ -202,6 +208,8 @@ struct StablePatchCandidate {
     double l2_end = 0.0;
     double J = 0.0;
     double d2 = 0.0;
+    /// ‖R‖∞ = max(|θ_end−θ_eff|, |φ_end−φ_t|); used for CPU ranking / seeds.
+    double r_residual = 0.0;
     int valid = 0;
 };
 
